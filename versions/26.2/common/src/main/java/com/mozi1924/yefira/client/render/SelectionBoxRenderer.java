@@ -33,11 +33,13 @@ public class SelectionBoxRenderer {
             max.getX() + 1.0, max.getY() + 1.0, max.getZ() + 1.0
         );
 
-        // Bright Cyan Stroke (90% opacity), Translucent Cyan Fill (20% opacity) for committed selection
-        GizmoStyle style = GizmoStyle.strokeAndFill(0xE600FFFF, 2.0f, 0x3300FFFF);
+        boolean isOversized = selection.isOversized();
+        GizmoStyle style = isOversized
+            ? GizmoStyle.strokeAndFill(0xF0FF2222, 2.5f, 0x40FF2222)
+            : GizmoStyle.strokeAndFill(0xE600FFFF, 2.0f, 0x3300FFFF);
         Gizmos.cuboid(box, style);
 
-        // Render Green Drag Preview Box if actively dragging in Ghost Mode
+        // Render Drag Preview Box if actively dragging in Ghost Mode
         com.mozi1924.yefira.client.ghost.GhostModeManager ghost = com.mozi1924.yefira.client.ghost.GhostModeManager.getInstance();
         if (ghost.isDragging()) {
             SelectionBox previewSel = ghost.getDragPreviewSelection();
@@ -48,8 +50,10 @@ public class SelectionBoxRenderer {
                     pMin.getX(), pMin.getY(), pMin.getZ(),
                     pMax.getX() + 1.0, pMax.getY() + 1.0, pMax.getZ() + 1.0
                 );
-                // Bright Lime Green Stroke (90% opacity), Translucent Green Fill (25% opacity)
-                GizmoStyle previewStyle = GizmoStyle.strokeAndFill(0xE600FF00, 2.5f, 0x4000FF00);
+                boolean previewOversized = previewSel.isOversized();
+                GizmoStyle previewStyle = previewOversized
+                    ? GizmoStyle.strokeAndFill(0xF0FF3300, 2.5f, 0x4DFF3300)
+                    : GizmoStyle.strokeAndFill(0xE600FF00, 2.5f, 0x4000FF00);
                 Gizmos.cuboid(previewBox, previewStyle);
             }
         }

@@ -75,4 +75,16 @@ public class SelectionBox {
             (min.getZ() + max.getZ() + 1) / 2.0
         );
     }
+
+    public boolean isOversized() {
+        com.mozi1924.yefira.config.YefiraConfig cfg = com.mozi1924.yefira.config.YefiraConfig.getInstance();
+        return isOversized(cfg.getMaxVolumeSoftLimit(), cfg.getMaxSideSoftLimit());
+    }
+
+    public boolean isOversized(long maxVolume, int maxSide) {
+        if (getVolume() > maxVolume) {
+            return true;
+        }
+        return getSizeX() > maxSide || getSizeY() > maxSide || getSizeZ() > maxSide;
+    }
 }

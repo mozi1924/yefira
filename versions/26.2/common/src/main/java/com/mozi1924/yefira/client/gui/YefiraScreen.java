@@ -235,11 +235,14 @@ public class YefiraScreen extends Screen {
         SelectionManager mgr = SelectionManager.getInstance();
         SelectionBox sel = mgr.getCurrentSelection();
         if (sel != null && sel.getMin() != null && sel.getMax() != null) {
-            Component selText = Component.translatable("yefira.gui.selection.info",
+            boolean oversized = sel.isOversized();
+            String key = oversized ? "yefira.gui.selection.oversized" : "yefira.gui.selection.info";
+            int color = oversized ? 0xFF5555 : 0x55FFFF;
+            Component selText = Component.translatable(key,
                     sel.getMin().toShortString(), sel.getMax().toShortString(),
                     String.valueOf(sel.getSizeX()), String.valueOf(sel.getSizeY()),
                     String.valueOf(sel.getSizeZ()), String.valueOf(sel.getVolume()));
-            graphics.centeredText(this.font, selText, centerX, startY + 218, 0x55FFFF);
+            graphics.centeredText(this.font, selText, centerX, startY + 218, color);
         } else {
             graphics.centeredText(this.font, Component.translatable("yefira.gui.selection.none"), centerX, startY + 218, 0xAAAAAA);
         }

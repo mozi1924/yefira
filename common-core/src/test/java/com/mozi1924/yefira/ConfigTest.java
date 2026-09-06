@@ -29,5 +29,19 @@ public class ConfigTest {
 
         config.setAutoStartOnWorldLoad(true);
         Assertions.assertTrue(config.isAutoStartOnWorldLoad());
+
+        // Soft limit defaults & setters
+        Assertions.assertEquals(262144L, config.getMaxVolumeSoftLimit());
+        Assertions.assertEquals(256, config.getMaxSideSoftLimit());
+
+        config.setMaxVolumeSoftLimit(500000L);
+        Assertions.assertEquals(500000L, config.getMaxVolumeSoftLimit());
+        config.setMaxVolumeSoftLimit(-100L); // invalid, should ignore
+        Assertions.assertEquals(500000L, config.getMaxVolumeSoftLimit());
+
+        config.setMaxSideSoftLimit(512);
+        Assertions.assertEquals(512, config.getMaxSideSoftLimit());
+        config.setMaxSideSoftLimit(-1); // invalid, should ignore
+        Assertions.assertEquals(512, config.getMaxSideSoftLimit());
     }
 }

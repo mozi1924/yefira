@@ -47,14 +47,16 @@ public class GhostGizmoRenderer {
                     bMin.getX(), bMin.getY(), bMin.getZ(),
                     bMax.getX() + 1.0, bMax.getY() + 1.0, bMax.getZ() + 1.0
                 );
-                // Vibrant Lime Green stroke and fill for drag selection
-                Gizmos.cuboid(createBox, GizmoStyle.strokeAndFill(0xFF00FF55, 3.5f, 0x4000FF55));
+                boolean oversized = boxCreate.isOversized();
+                int strokeColor = oversized ? 0xFFFF3300 : 0xFF00FF55;
+                int fillColor = oversized ? 0x4DFF3300 : 0x4000FF55;
+                Gizmos.cuboid(createBox, GizmoStyle.strokeAndFill(strokeColor, 3.5f, fillColor));
 
                 // Corner indicators
                 Vec3 startCorner = new Vec3(bMin.getX() + 0.5, bMin.getY() + 0.5, bMin.getZ() + 0.5);
                 Vec3 endCorner = new Vec3(bMax.getX() + 0.5, bMax.getY() + 0.5, bMax.getZ() + 0.5);
-                Gizmos.point(startCorner, 0xFF00FF55, 8.0f);
-                Gizmos.point(endCorner, 0xFFFFFF55, 8.0f);
+                Gizmos.point(startCorner, strokeColor, 8.0f);
+                Gizmos.point(endCorner, oversized ? 0xFFFF7755 : 0xFFFFFF55, 8.0f);
             }
             return; // Do not render old gizmos while actively dragging a new box
         }

@@ -28,6 +28,8 @@ public class YefiraConfig {
     private String host = "0.0.0.0";
     private int port = 8765;
     private boolean autoStartOnWorldLoad = false;
+    private long maxVolumeSoftLimit = 262144L; // Default 64x64x64 = 262,144 blocks
+    private int maxSideSoftLimit = 256;        // Default 256 max single side length
 
     public static YefiraConfig getInstance() {
         return instance;
@@ -57,10 +59,22 @@ public class YefiraConfig {
             if (obj.has("autoStartOnWorldLoad")) {
                 cfg.autoStartOnWorldLoad = obj.get("autoStartOnWorldLoad").getAsBoolean();
             }
+            if (obj.has("maxVolumeSoftLimit")) {
+                long mv = obj.get("maxVolumeSoftLimit").getAsLong();
+                if (mv > 0) {
+                    cfg.maxVolumeSoftLimit = mv;
+                }
+            }
+            if (obj.has("maxSideSoftLimit")) {
+                int ms = obj.get("maxSideSoftLimit").getAsInt();
+                if (ms > 0) {
+                    cfg.maxSideSoftLimit = ms;
+                }
+            }
 
             instance = cfg;
-            Yefira.LOGGER.info("Loaded Yefira config: host={}, port={}, autoStart={}",
-                    instance.host, instance.port, instance.autoStartOnWorldLoad);
+            Yefira.LOGGER.info("Loaded Yefira config: host={}, port={}, autoStart={}, maxVolumeSoftLimit={}, maxSideSoftLimit={}",
+                    instance.host, instance.port, instance.autoStartOnWorldLoad, instance.maxVolumeSoftLimit, instance.maxSideSoftLimit);
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to load Yefira config, falling back to defaults", e);
             instance = new YefiraConfig();
@@ -75,6 +89,8 @@ public class YefiraConfig {
             obj.addProperty("host", instance.host);
             obj.addProperty("port", instance.port);
             obj.addProperty("autoStartOnWorldLoad", instance.autoStartOnWorldLoad);
+            obj.addProperty("maxVolumeSoftLimit", instance.maxVolumeSoftLimit);
+            obj.addProperty("maxSideSoftLimit", instance.maxSideSoftLimit);
 
             if (configPath.getParent() != null && !Files.exists(configPath.getParent())) {
                 Files.createDirectories(configPath.getParent());
@@ -112,5 +128,25 @@ public class YefiraConfig {
 
     public void setAutoStartOnWorldLoad(boolean autoStartOnWorldLoad) {
         this.autoStartOnWorldLoad = autoStartOnWorldLoad;
+    }
+
+    public long getMaxVolumeSoftLimit() {
+        return maxVolumeSoftLimit;
+    }
+
+    public void setMaxVolumeSoftLimit(long maxVolumeSoftLimit) {
+        if (maxVolumeSoftLimit > 0) {
+            this.maxVolumeSoftLimit = maxVolumeSoftLimit;
+        }
+    }
+
+    public int getMaxSideSoftLimit() {
+        return maxSideSoftLimit;
+    }
+
+    public void setMaxSideSoftLimit(int maxSideSoftLimit) {
+        if (maxSideSoftLimit > 0) {
+            this.maxSideSoftLimit = maxSideSoftLimit;
+        }
     }
 }

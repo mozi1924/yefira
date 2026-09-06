@@ -29,12 +29,15 @@
   "yefira.hud.server.running": "● 服务在线 (%s)",
   "yefira.hud.server.stopped": "○ 服务离线",
   "yefira.hud.selection.info": "选区: %sx%sx%s (%s 方块) [拖动手柄微调 | 按 X 清空后可重新框选]",
+  "yefira.hud.selection.oversized": "⚠️ [选区过大警告] 选区: %sx%sx%s (%s 方块) [Blender 同步可能会卡顿/高负载！]",
   "yefira.hud.hovered.block": "目标方块: %s (按住左键拖拽框选)",
   "yefira.hud.dragging.info": "📦 正在拖拽选区: %sx%sx%s (%s 方块) [松开左键完成，按右键/ESC取消]",
+  "yefira.hud.dragging.oversized": "⚠️ [选区过大] 正在拖拽: %sx%sx%s (%s 方块) [已超出推荐阈值]",
 
   "yefira.command.pos1.set": "§a[Yefira] 第一点坐标已设为 %s",
   "yefira.command.pos2.set": "§a[Yefira] 第二点坐标已设为 %s",
   "yefira.command.box.set": "§a[Yefira] 选区已设定: %s 至 %s (尺寸: %sx%sx%s, 共 %s 方块)",
+  "yefira.command.oversized_warning": "§c[Yefira 警告] 当前选区已超出推荐上限 (尺寸: %sx%sx%s, 共 %s 方块，建议上限: %s 方块)！Blender 同步可能会严重卡顿或占用大量显存。",
   "yefira.command.clear.success": "§e[Yefira] 选区已清空。",
   "yefira.command.refresh.success": "§a[Yefira] 已重新向客户端广播全量快照。",
   "yefira.command.refresh.no_selection": "§c[Yefira] 当前无活动选区，无法刷新。",
@@ -47,13 +50,17 @@
   "yefira.command.server.restarted": "§a[Yefira] WebSocket 服务已重启于 %s:%s",
   "yefira.command.server.status.running": "§a[Yefira] WebSocket 服务正在运行于 %s:%s，当前连接数: %s。",
   "yefira.command.server.status.stopped": "§7[Yefira] WebSocket 服务当前已停止。",
-  "yefira.command.config.info": "§b[Yefira] 当前配置:\n - 主机: %s\n - 端口: %s\n - 随世界加载自动启动: %s",
+  "yefira.command.config.info": "§b[Yefira] 当前配置:\n - 主机: %s\n - 端口: %s\n - 随世界加载自动启动: %s\n - 体积软限制: %s 方块\n - 单轴边长软限制: %s 格",
   "yefira.command.config.host.set": "§a[Yefira] WebSocket 主机地址已设为: %s",
   "yefira.command.config.port.set": "§a[Yefira] WebSocket 端口已设为: %s",
   "yefira.command.config.port.invalid": "§c[Yefira] 端口号必须在 1024 到 65535 之间。",
   "yefira.command.config.autostart.set": "§a[Yefira] 随世界加载自动启动已设为: %s",
+  "yefira.command.config.max_volume.set": "§a[Yefira] 选区体积软限制阈值已设为: %s 方块",
+  "yefira.command.config.max_side.set": "§a[Yefira] 选区单轴边长软限制阈值已设为: %s 格",
   "yefira.command.gui.opened": "§a[Yefira] 正在打开控制面板...",
   "yefira.command.gui.unavailable": "§c[Yefira] 控制面板仅支持在客户端或单人游戏中打开，在专用服务器上请直接使用 /yefira 相关命令。",
   "yefira.command.dump.success": "§a[Yefira] 已将 %s 个朝向方块模型导出至 %s",
-  "yefira.command.dump.failed": "§c[Yefira] 导出方块模型失败: %s"
+  "yefira.command.dump.failed": "§c[Yefira] 导出方块模型失败: %s",
+
+  "yefira.gui.selection.oversized": "⚠️ 选区: %s 至 %s | 尺寸: %sx%sx%s (%s 方块) [过大警告]"
 }

@@ -80,7 +80,15 @@ public class SelectionCommand {
                 .then(Commands.literal("autostart")
                     .executes(SelectionCommand::showConfigAutoStart)
                     .then(Commands.argument("enabled", BoolArgumentType.bool())
-                        .executes(ctx -> setConfigAutoStart(ctx, BoolArgumentType.getBool(ctx, "enabled"))))))
+                        .executes(ctx -> setConfigAutoStart(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
+                .then(Commands.literal("max_volume")
+                    .executes(SelectionCommand::showConfigMaxVolume)
+                    .then(Commands.argument("volume", IntegerArgumentType.integer(1))
+                        .executes(ctx -> setConfigMaxVolume(ctx, IntegerArgumentType.getInteger(ctx, "volume")))))
+                .then(Commands.literal("max_side")
+                    .executes(SelectionCommand::showConfigMaxSide)
+                    .then(Commands.argument("side", IntegerArgumentType.integer(1))
+                        .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side"))))))
 
             // Direct shortcuts matching GUI fields
             .then(Commands.literal("host")
@@ -98,6 +106,16 @@ public class SelectionCommand {
                 .executes(SelectionCommand::showConfigAutoStart)
                 .then(Commands.argument("enabled", BoolArgumentType.bool())
                     .executes(ctx -> setConfigAutoStart(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
+            .then(Commands.literal("max_volume")
+                .requires(SelectionCommand::hasAdminPermission)
+                .executes(SelectionCommand::showConfigMaxVolume)
+                .then(Commands.argument("volume", IntegerArgumentType.integer(1))
+                    .executes(ctx -> setConfigMaxVolume(ctx, IntegerArgumentType.getInteger(ctx, "volume")))))
+            .then(Commands.literal("max_side")
+                .requires(SelectionCommand::hasAdminPermission)
+                .executes(SelectionCommand::showConfigMaxSide)
+                .then(Commands.argument("side", IntegerArgumentType.integer(1))
+                    .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side")))))
 
             // 5. Utility commands
             .then(Commands.literal("dump_directional_models")
@@ -106,33 +124,49 @@ public class SelectionCommand {
         );
     }
 
+    private static void checkAndWarnOversized(CommandSourceStack source, SelectionBox box) {
+        if (box != null && box.isOversized()) {
+            YefiraConfig cfg = YefiraConfig.getInstance();
+            source.sendSuccess(() -> Component.translatable("yefira.command.oversized_warning",
+                    box.getSizeX(), box.getSizeY(), box.getSizeZ(), box.getVolume(), cfg.getMaxVolumeSoftLimit()), false);
+        }
+    }
+
     private static int setPos1Current(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         BlockPos pos = BlockPos.containing(source.getPosition());
-        SelectionManager.getInstance().setPos1(source.getLevel(), pos);
+        SelectionManager mgr = SelectionManager.getInstance();
+        mgr.setPos1(source.getLevel(), pos);
         source.sendSuccess(() -> Component.translatable("yefira.command.pos1.set", pos.toShortString()), true);
+        checkAndWarnOversized(source, mgr.getCurrentSelection());
         return 1;
     }
 
     private static int setPos1Specific(CommandContext<CommandSourceStack> ctx, BlockPos pos) {
         CommandSourceStack source = ctx.getSource();
-        SelectionManager.getInstance().setPos1(source.getLevel(), pos);
+        SelectionManager mgr = SelectionManager.getInstance();
+        mgr.setPos1(source.getLevel(), pos);
         source.sendSuccess(() -> Component.translatable("yefira.command.pos1.set", pos.toShortString()), true);
+        checkAndWarnOversized(source, mgr.getCurrentSelection());
         return 1;
     }
 
     private static int setPos2Current(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         BlockPos pos = BlockPos.containing(source.getPosition());
-        SelectionManager.getInstance().setPos2(source.getLevel(), pos);
+        SelectionManager mgr = SelectionManager.getInstance();
+        mgr.setPos2(source.getLevel(), pos);
         source.sendSuccess(() -> Component.translatable("yefira.command.pos2.set", pos.toShortString()), true);
+        checkAndWarnOversized(source, mgr.getCurrentSelection());
         return 1;
     }
 
     private static int setPos2Specific(CommandContext<CommandSourceStack> ctx, BlockPos pos) {
         CommandSourceStack source = ctx.getSource();
-        SelectionManager.getInstance().setPos2(source.getLevel(), pos);
+        SelectionManager mgr = SelectionManager.getInstance();
+        mgr.setPos2(source.getLevel(), pos);
         source.sendSuccess(() -> Component.translatable("yefira.command.pos2.set", pos.toShortString()), true);
+        checkAndWarnOversized(source, mgr.getCurrentSelection());
         return 1;
     }
 
@@ -144,6 +178,7 @@ public class SelectionCommand {
         source.sendSuccess(() -> Component.translatable("yefira.command.box.set",
                 box.getMin().toShortString(), box.getMax().toShortString(),
                 box.getSizeX(), box.getSizeY(), box.getSizeZ(), box.getVolume()), true);
+        checkAndWarnOversized(source, box);
         return 1;
     }
 
@@ -276,7 +311,8 @@ public class SelectionCommand {
         CommandSourceStack source = ctx.getSource();
         YefiraConfig cfg = YefiraConfig.getInstance();
         source.sendSuccess(() -> Component.translatable("yefira.command.config.info",
-                cfg.getHost(), cfg.getPort(), String.valueOf(cfg.isAutoStartOnWorldLoad())), false);
+                cfg.getHost(), cfg.getPort(), String.valueOf(cfg.isAutoStartOnWorldLoad()),
+                String.valueOf(cfg.getMaxVolumeSoftLimit()), String.valueOf(cfg.getMaxSideSoftLimit())), false);
         return 1;
     }
 
@@ -325,6 +361,38 @@ public class SelectionCommand {
         cfg.setAutoStartOnWorldLoad(autoStart);
         YefiraConfig.save();
         source.sendSuccess(() -> Component.translatable("yefira.command.config.autostart.set", String.valueOf(autoStart)), true);
+        return 1;
+    }
+
+    private static int showConfigMaxVolume(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.max_volume.set", String.valueOf(cfg.getMaxVolumeSoftLimit())), false);
+        return 1;
+    }
+
+    private static int setConfigMaxVolume(CommandContext<CommandSourceStack> ctx, int maxVolume) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        cfg.setMaxVolumeSoftLimit(maxVolume);
+        YefiraConfig.save();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.max_volume.set", String.valueOf(maxVolume)), true);
+        return 1;
+    }
+
+    private static int showConfigMaxSide(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.max_side.set", String.valueOf(cfg.getMaxSideSoftLimit())), false);
+        return 1;
+    }
+
+    private static int setConfigMaxSide(CommandContext<CommandSourceStack> ctx, int maxSide) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        cfg.setMaxSideSoftLimit(maxSide);
+        YefiraConfig.save();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.max_side.set", String.valueOf(maxSide)), true);
         return 1;
     }
 

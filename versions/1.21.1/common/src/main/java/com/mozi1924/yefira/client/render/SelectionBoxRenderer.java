@@ -44,8 +44,9 @@ public class SelectionBoxRenderer {
 
         GhostModeManager ghost = GhostModeManager.getInstance();
         AABB previewBox = null;
+        SelectionBox previewSel = null;
         if (ghost.isDragging()) {
-            SelectionBox previewSel = ghost.getDragPreviewSelection();
+            previewSel = ghost.getDragPreviewSelection();
             if (previewSel != null) {
                 BlockPos pMin = previewSel.getMin();
                 BlockPos pMax = previewSel.getMax();
@@ -56,21 +57,46 @@ public class SelectionBoxRenderer {
             }
         }
 
+        boolean isOversized = selection.isOversized();
+        boolean previewOversized = previewSel != null && previewSel.isOversized();
+
         // Pass 1: Translucent fills
-        // Bright Cyan Fill (0.0f, 1.0f, 1.0f, 0.2f)
-        RenderCompat.renderFilledBox(poseStack, bufferSource, box, 0.0f, 1.0f, 1.0f, 0.2f);
+        if (isOversized) {
+            // Alert Red Fill (1.0f, 0.1f, 0.1f, 0.25f)
+            RenderCompat.renderFilledBox(poseStack, bufferSource, box, 1.0f, 0.1f, 0.1f, 0.25f);
+        } else {
+            // Bright Cyan Fill (0.0f, 1.0f, 1.0f, 0.2f)
+            RenderCompat.renderFilledBox(poseStack, bufferSource, box, 0.0f, 1.0f, 1.0f, 0.2f);
+        }
+
         if (previewBox != null) {
-            // Translucent Green Fill (0.0f, 1.0f, 0.0f, 0.25f)
-            RenderCompat.renderFilledBox(poseStack, bufferSource, previewBox, 0.0f, 1.0f, 0.0f, 0.25f);
+            if (previewOversized) {
+                // Alert Red-Orange Fill (1.0f, 0.2f, 0.0f, 0.3f)
+                RenderCompat.renderFilledBox(poseStack, bufferSource, previewBox, 1.0f, 0.2f, 0.0f, 0.3f);
+            } else {
+                // Translucent Green Fill (0.0f, 1.0f, 0.0f, 0.25f)
+                RenderCompat.renderFilledBox(poseStack, bufferSource, previewBox, 0.0f, 1.0f, 0.0f, 0.25f);
+            }
         }
 
         // Pass 2: Line strokes
-        // Bright Cyan Stroke (0.0f, 1.0f, 1.0f, 0.9f)
         VertexConsumer lineBuffer = bufferSource.getBuffer(RenderType.lines());
-        RenderCompat.renderLineBox(poseStack, lineBuffer, box, 0.0f, 1.0f, 1.0f, 0.9f);
+        if (isOversized) {
+            // Alert Red Stroke (1.0f, 0.15f, 0.15f, 0.95f)
+            RenderCompat.renderLineBox(poseStack, lineBuffer, box, 1.0f, 0.15f, 0.15f, 0.95f);
+        } else {
+            // Bright Cyan Stroke (0.0f, 1.0f, 1.0f, 0.9f)
+            RenderCompat.renderLineBox(poseStack, lineBuffer, box, 0.0f, 1.0f, 1.0f, 0.9f);
+        }
+
         if (previewBox != null) {
-            // Bright Lime Green Stroke (0.0f, 1.0f, 0.0f, 0.9f)
-            RenderCompat.renderLineBox(poseStack, lineBuffer, previewBox, 0.0f, 1.0f, 0.0f, 0.9f);
+            if (previewOversized) {
+                // Alert Red-Orange Stroke (1.0f, 0.2f, 0.0f, 0.95f)
+                RenderCompat.renderLineBox(poseStack, lineBuffer, previewBox, 1.0f, 0.2f, 0.0f, 0.95f);
+            } else {
+                // Bright Lime Green Stroke (0.0f, 1.0f, 0.0f, 0.9f)
+                RenderCompat.renderLineBox(poseStack, lineBuffer, previewBox, 0.0f, 1.0f, 0.0f, 0.9f);
+            }
         }
     }
 }

@@ -81,9 +81,15 @@ public class GhostGizmoRenderer {
                     bMin.getX() - camPos.x, bMin.getY() - camPos.y, bMin.getZ() - camPos.z,
                     bMax.getX() + 1.0 - camPos.x, bMax.getY() + 1.0 - camPos.y, bMax.getZ() + 1.0 - camPos.z
                 );
-                RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, createBox, 0.0f, 1.0f, 0.33f, 0.25f);
+                boolean oversized = boxCreate.isOversized();
+                float cr = oversized ? 1.0f : 0.0f;
+                float cg = oversized ? 0.2f : 1.0f;
+                float cb = oversized ? 0.0f : 0.33f;
+                float fillAlpha = oversized ? 0.3f : 0.25f;
+
+                RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, createBox, cr, cg, cb, fillAlpha);
                 VertexConsumer lineBuffer = bufferSource.getBuffer(com.mozi1924.yefira.client.render.YefiraRenderTypes.selectionLines());
-                RenderCompat.renderLineBox(poseStack, lineBuffer, createBox, 0.0f, 1.0f, 0.33f, 1.0f);
+                RenderCompat.renderLineBox(poseStack, lineBuffer, createBox, cr, cg, cb, 1.0f);
                 RenderCompat.endLastBatch(bufferSource);
             }
             return;

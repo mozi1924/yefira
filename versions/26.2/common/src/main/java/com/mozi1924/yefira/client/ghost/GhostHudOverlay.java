@@ -49,19 +49,32 @@ public class GhostHudOverlay {
         if (ghost.isBoxCreating()) {
             SelectionBox sel = ghost.getBoxCreateSelection();
             if (sel != null) {
-                Component dragInfo = Component.translatable("yefira.hud.dragging.info",
-                    sel.getSizeX(), sel.getSizeY(), sel.getSizeZ(), sel.getVolume());
-                graphics.fill(6, bottomY - 3, 8 + font.width(dragInfo) + 4, bottomY + 11, 0xAA003300);
-                graphics.text(font, dragInfo, 8, bottomY, 0xFF55FF55, true);
+                boolean oversized = sel.isOversized();
+                Component dragInfo = oversized
+                    ? Component.translatable("yefira.hud.dragging.oversized",
+                        sel.getSizeX(), sel.getSizeY(), sel.getSizeZ(), sel.getVolume())
+                    : Component.translatable("yefira.hud.dragging.info",
+                        sel.getSizeX(), sel.getSizeY(), sel.getSizeZ(), sel.getVolume());
+                int bgColor = oversized ? 0xDD550000 : 0xAA003300;
+                int textColor = oversized ? 0xFFFF4444 : 0xFF55FF55;
+                graphics.fill(6, bottomY - 3, 8 + font.width(dragInfo) + 4, bottomY + 11, bgColor);
+                graphics.text(font, dragInfo, 8, bottomY, textColor, true);
             }
         } else {
             SelectionBox sel = mgr.getCurrentSelection();
             if (sel != null) {
-                Component selInfo = Component.translatable("yefira.hud.selection.info",
-                    String.valueOf(sel.getSizeX()), String.valueOf(sel.getSizeY()),
-                    String.valueOf(sel.getSizeZ()), String.valueOf(sel.getVolume()));
-                graphics.fill(6, bottomY - 3, 8 + font.width(selInfo) + 4, bottomY + 11, 0x88000000);
-                graphics.text(font, selInfo, 8, bottomY, 0xFF55FFFF, true);
+                boolean oversized = sel.isOversized();
+                Component selInfo = oversized
+                    ? Component.translatable("yefira.hud.selection.oversized",
+                        String.valueOf(sel.getSizeX()), String.valueOf(sel.getSizeY()),
+                        String.valueOf(sel.getSizeZ()), String.valueOf(sel.getVolume()))
+                    : Component.translatable("yefira.hud.selection.info",
+                        String.valueOf(sel.getSizeX()), String.valueOf(sel.getSizeY()),
+                        String.valueOf(sel.getSizeZ()), String.valueOf(sel.getVolume()));
+                int bgColor = oversized ? 0xDD550000 : 0x88000000;
+                int textColor = oversized ? 0xFFFF4444 : 0xFF55FFFF;
+                graphics.fill(6, bottomY - 3, 8 + font.width(selInfo) + 4, bottomY + 11, bgColor);
+                graphics.text(font, selInfo, 8, bottomY, textColor, true);
             } else if (ghost.getHoveredBlockPos() != null) {
                 Component hoverInfo = Component.translatable("yefira.hud.hovered.block", ghost.getHoveredBlockPos().toShortString());
                 graphics.fill(6, bottomY - 3, 8 + font.width(hoverInfo) + 4, bottomY + 11, 0x88000000);

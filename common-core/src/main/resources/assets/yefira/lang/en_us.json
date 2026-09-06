@@ -29,12 +29,15 @@
   "yefira.hud.server.running": "● WS Active (%s)",
   "yefira.hud.server.stopped": "○ WS Offline",
   "yefira.hud.selection.info": "Selection: %sx%sx%s (%s blocks) [Drag Gizmo to adjust | X: Clear to re-select]",
+  "yefira.hud.selection.oversized": "⚠️ [OVERSIZED WARNING] Selection: %sx%sx%s (%s blocks) [Blender sync may experience lag/high memory!]",
   "yefira.hud.hovered.block": "Target: %s (Hold LMB & Drag to select)",
   "yefira.hud.dragging.info": "📦 Drag-Selecting: %sx%sx%s (%s blocks) [Release LMB to finish, RMB/ESC to cancel]",
+  "yefira.hud.dragging.oversized": "⚠️ [OVERSIZED] Drag-Selecting: %sx%sx%s (%s blocks) [Exceeds recommended limit]",
 
   "yefira.command.pos1.set": "§a[Yefira] First position set to %s",
   "yefira.command.pos2.set": "§a[Yefira] Second position set to %s",
   "yefira.command.box.set": "§a[Yefira] Selection set: %s to %s (Size: %sx%sx%s, %s blocks)",
+  "yefira.command.oversized_warning": "§c[Yefira Warning] Active selection exceeds recommended soft limit (Size: %sx%sx%s, %s blocks, limit: %s blocks)! Blender sync may experience high memory usage.",
   "yefira.command.clear.success": "§e[Yefira] Selection cleared.",
   "yefira.command.refresh.success": "§a[Yefira] Full snapshot re-broadcasted.",
   "yefira.command.refresh.no_selection": "§c[Yefira] No active selection to refresh.",
@@ -47,13 +50,17 @@
   "yefira.command.server.restarted": "§a[Yefira] WebSocket Server restarted on %s:%s",
   "yefira.command.server.status.running": "§a[Yefira] WebSocket Server is running on %s:%s with %s connected client(s).",
   "yefira.command.server.status.stopped": "§7[Yefira] WebSocket Server is currently stopped.",
-  "yefira.command.config.info": "§b[Yefira] Current Config:\n - Host: %s\n - Port: %s\n - AutoStart on World Load: %s",
+  "yefira.command.config.info": "§b[Yefira] Current Config:\n - Host: %s\n - Port: %s\n - AutoStart on World Load: %s\n - Max Volume Soft Limit: %s blocks\n - Max Side Soft Limit: %s blocks",
   "yefira.command.config.host.set": "§a[Yefira] WebSocket host set to: %s",
   "yefira.command.config.port.set": "§a[Yefira] WebSocket port set to: %s",
   "yefira.command.config.port.invalid": "§c[Yefira] Port must be between 1024 and 65535.",
   "yefira.command.config.autostart.set": "§a[Yefira] AutoStart on world load set to: %s",
+  "yefira.command.config.max_volume.set": "§a[Yefira] Selection volume soft limit set to: %s blocks",
+  "yefira.command.config.max_side.set": "§a[Yefira] Selection max side soft limit set to: %s blocks",
   "yefira.command.gui.opened": "§a[Yefira] Opening control panel...",
   "yefira.command.gui.unavailable": "§c[Yefira] Control panel is only available on client or singleplayer. On dedicated servers, please use /yefira commands.",
   "yefira.command.dump.success": "§a[Yefira] Dumped %s directional models to %s",
-  "yefira.command.dump.failed": "§c[Yefira] Failed to dump models: %s"
+  "yefira.command.dump.failed": "§c[Yefira] Failed to dump models: %s",
+
+  "yefira.gui.selection.oversized": "⚠️ Selection: %s to %s | Size: %sx%sx%s (%s blocks) [Oversized]"
 }
