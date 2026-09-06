@@ -440,6 +440,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             if (volume <= 32768) {
                 byte[] snapshotBytes = BlockDataEncoder.encodeFullSnapshot(level, selection);
                 sendSafe(conn, snapshotBytes);
+                byte[] endPacket = BlockDataEncoder.encodeStreamEnd(snapshotSeqId, 1, BlockDataEncoder.STREAM_STATUS_SUCCESS);
+                sendSafe(conn, endPacket);
             } else {
                 BlockDataEncoder.streamNonEmptySectionSnapshots(level, selection, snapshotSeqId, () -> !conn.isOpen(), bytes -> sendSafe(conn, bytes));
             }
@@ -467,8 +469,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
             if (volume <= 32768) {
                 byte[] snapshotBytes = BlockDataEncoder.encodeFullSnapshot(level, selection);
+                byte[] endPacket = BlockDataEncoder.encodeStreamEnd(snapshotSeqId, 1, BlockDataEncoder.STREAM_STATUS_SUCCESS);
                 for (WebSocket client : List.copyOf(clients)) {
                     sendSafe(client, snapshotBytes);
+                    sendSafe(client, endPacket);
                 }
             } else {
                 BlockDataEncoder.streamNonEmptySectionSnapshots(

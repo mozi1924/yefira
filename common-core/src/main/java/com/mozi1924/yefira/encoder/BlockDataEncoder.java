@@ -292,8 +292,8 @@ public class BlockDataEncoder {
             // Current Sequence ID (uint32 LE)
             writeIntLE(out, (int) currentSeqId);
 
-            // Count of sections
-            writeShortLE(out, sections.size());
+            // Count of sections (uint32 LE)
+            writeIntLE(out, sections.size());
 
             for (SectionPos sec : sections) {
                 writeIntLE(out, sec.x);
@@ -610,7 +610,7 @@ public class BlockDataEncoder {
 
     public static byte[] encodeHandshakeInfo(int totalSections, int nonEmptySections, long totalVolume, String dimension, int flags) {
         byte[] dimBytes = (dimension != null ? dimension : "").getBytes(StandardCharsets.UTF_8);
-        ByteBuffer buf = ByteBuffer.allocate(4 + 2 + 2 + 4 + 2 + dimBytes.length + 2);
+        ByteBuffer buf = ByteBuffer.allocate(4 + 4 + 4 + 4 + 2 + dimBytes.length + 2);
         buf.order(ByteOrder.LITTLE_ENDIAN);
 
         // Header
@@ -619,8 +619,8 @@ public class BlockDataEncoder {
         buf.put(PACKET_HANDSHAKE_INFO);
 
         // Section & Volume metrics
-        buf.putShort((short) totalSections);
-        buf.putShort((short) nonEmptySections);
+        buf.putInt(totalSections);
+        buf.putInt(nonEmptySections);
         buf.putInt((int) totalVolume);
 
         // Dimension & Flags
