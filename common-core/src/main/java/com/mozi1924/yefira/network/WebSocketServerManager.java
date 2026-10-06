@@ -364,6 +364,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
                     byte[] endPacket = BlockDataEncoder.encodeStreamEnd(streamId, sent, 0);
                     sendSafe(conn, endPacket);
+
+                    // Post-stream Manifest for repaired sections
+                    byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, streamId);
+                    sendSafe(conn, manifestBytes);
                 });
             }
         } catch (Exception e) {
@@ -434,9 +438,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
             if (!sendSafe(conn, infoBytes)) return;
 
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
-            if (!sendSafe(conn, manifestBytes)) return;
-
             if (volume <= 32768) {
                 byte[] snapshotBytes = BlockDataEncoder.encodeFullSnapshot(level, selection);
                 sendSafe(conn, snapshotBytes);
@@ -445,6 +446,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             } else {
                 BlockDataEncoder.streamNonEmptySectionSnapshots(level, selection, snapshotSeqId, () -> !conn.isOpen(), bytes -> sendSafe(conn, bytes));
             }
+
+            // Post-stream Manifest for final end-to-end verification
+            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
+            sendSafe(conn, manifestBytes);
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to send snapshot to client {}", conn.getRemoteSocketAddress(), e);
         }
@@ -460,11 +465,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             long volume = selection.getVolume();
 
             byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
-
             for (WebSocket client : List.copyOf(clients)) {
                 sendSafe(client, infoBytes);
-                sendSafe(client, manifestBytes);
             }
 
             if (volume <= 32768) {
@@ -490,6 +492,12 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                             return anySuccess || clients.isEmpty();
                         }
                 );
+            }
+
+            // Post-stream Manifest for final verification across all clients
+            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
+            for (WebSocket client : List.copyOf(clients)) {
+                sendSafe(client, manifestBytes);
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Error broadcasting snapshot", e);
