@@ -352,6 +352,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     int sent = 0;
                     for (BlockDataEncoder.SectionPos secPos : requestedPositions) {
                         if (conn == null || !conn.isOpen()) break;
+                        BlockDataEncoder.invalidateSectionCRC(secPos);
                         byte[] sectionSnapshot = BlockDataEncoder.encodeSectionSnapshot(level, selection, secPos);
                         if (!sendSafe(conn, sectionSnapshot)) {
                             break;
@@ -365,7 +366,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     byte[] endPacket = BlockDataEncoder.encodeStreamEnd(streamId, sent, 0);
                     sendSafe(conn, endPacket);
 
-                    // Post-stream Manifest for repaired sections
+                    // Post-stream Manifest for repaired sections (with invalidated CRCs)
                     byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, streamId);
                     sendSafe(conn, manifestBytes);
                 });
@@ -379,9 +380,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     @Override
     public void onSelectionChanged(Level level, SelectionBox selection) {
-        if (clients.isEmpty()) return;
         clearPendingDeltaChanges();
         BlockDataEncoder.clearSectionCRCCache();
+        if (clients.isEmpty()) return;
 
         long newStreamId = globalSeqId.incrementAndGet();
         activeBroadcastStreamId.set(newStreamId);
@@ -402,6 +403,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public void onSelectionCleared() {
         clearPendingDeltaChanges();
         BlockDataEncoder.clearSectionCRCCache();
+        if (clients.isEmpty()) return;
         java.util.concurrent.Future<?> prevTask = activeBroadcastFuture.getAndSet(null);
         if (prevTask != null && !prevTask.isDone()) {
             prevTask.cancel(true);
@@ -412,6 +414,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     private void sendHandshakeManifestToClient(WebSocket conn, Level level, SelectionBox selection) {
         try {
+            BlockDataEncoder.clearSectionCRCCache();
             long snapshotSeqId = globalSeqId.incrementAndGet();
             byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
             if (!sendSafe(conn, infoBytes)) return;
@@ -544,9 +547,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     public void queueDeltaUpdate(SelectionBox selection, BlockDataEncoder.BlockChangeEntry change) {
-        if (clients.isEmpty()) return;
         BlockPos pos = change.pos();
         BlockDataEncoder.invalidateSectionCRC(new BlockDataEncoder.SectionPos(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4));
+        if (clients.isEmpty()) return;
         synchronized (pendingDeltaChanges) {
             if (pendingDeltaSelection != null && !sameBounds(pendingDeltaSelection, selection)) {
                 pendingDeltaChanges.clear();

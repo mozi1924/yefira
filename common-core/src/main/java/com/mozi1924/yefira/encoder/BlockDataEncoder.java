@@ -314,6 +314,7 @@ public class BlockDataEncoder {
      * 编码 0x06 Section Snapshot 单区块快照数据包
      */
     public static byte[] encodeSectionSnapshot(Level level, SelectionBox selection, SectionPos secPos) {
+        invalidateSectionCRC(secPos);
         int startX = Math.max(selection.getMin().getX(), secPos.x << 4);
         int endX = Math.min(selection.getMax().getX(), (secPos.x << 4) + 15);
 
