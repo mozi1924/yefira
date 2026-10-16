@@ -147,11 +147,15 @@ public class BlockDataEncoder {
 
         int index = 0;
         BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+        Map<Long, String> quartBiomeCache = new HashMap<>();
 
         for (int x = 0; x < sizeX; x++) {
             for (int y = 0; y < sizeY; y++) {
                 for (int z = 0; z < sizeZ; z++) {
-                    mutablePos.set(min.getX() + x, min.getY() + y, min.getZ() + z);
+                    int worldX = min.getX() + x;
+                    int worldY = min.getY() + y;
+                    int worldZ = min.getZ() + z;
+                    mutablePos.set(worldX, worldY, worldZ);
                     BlockState state = level.getBlockState(mutablePos);
                     Integer paletteIdx = stateToPaletteIdx.get(state);
                     if (paletteIdx == null) {
@@ -161,7 +165,15 @@ public class BlockDataEncoder {
                         stateToPaletteIdx.put(state, paletteIdx);
                     }
 
-                    String biomeId = getBiomeId(level, mutablePos);
+                    long quartKey = (((long) (worldX >> 2) & 0x3FFFFF) << 42)
+                            | (((long) (worldY >> 2) & 0x3FFFFF) << 21)
+                            | (((long) (worldZ >> 2) & 0x3FFFFF));
+                    String biomeId = quartBiomeCache.get(quartKey);
+                    if (biomeId == null) {
+                        biomeId = getBiomeId(level, mutablePos);
+                        quartBiomeCache.put(quartKey, biomeId);
+                    }
+
                     Integer biomeIdx = biomeToIdx.get(biomeId);
                     if (biomeIdx == null) {
                         biomeIdx = biomePalette.size();
@@ -314,7 +326,6 @@ public class BlockDataEncoder {
      * 编码 0x06 Section Snapshot 单区块快照数据包
      */
     public static byte[] encodeSectionSnapshot(Level level, SelectionBox selection, SectionPos secPos) {
-        invalidateSectionCRC(secPos);
         int startX = Math.max(selection.getMin().getX(), secPos.x << 4);
         int endX = Math.min(selection.getMax().getX(), (secPos.x << 4) + 15);
 
@@ -340,11 +351,16 @@ public class BlockDataEncoder {
 
         int index = 0;
         BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        Map<Long, String> quartBiomeCache = new HashMap<>(64);
 
         for (int x = 0; x < sizeX; x++) {
             for (int y = 0; y < sizeY; y++) {
                 for (int z = 0; z < sizeZ; z++) {
-                    mutablePos.set(startX + x, startY + y, startZ + z);
+                    int worldX = startX + x;
+                    int worldY = startY + y;
+                    int worldZ = startZ + z;
+                    mutablePos.set(worldX, worldY, worldZ);
                     BlockState state = level.getBlockState(mutablePos);
                     Integer paletteIdx = stateToPaletteIdx.get(state);
                     if (paletteIdx == null) {
@@ -354,7 +370,20 @@ public class BlockDataEncoder {
                         stateToPaletteIdx.put(state, paletteIdx);
                     }
 
-                    String biomeId = getBiomeId(level, mutablePos);
+                    // Pipelined CRC32 computation during single scan pass
+                    byte[] stateBytes = STATE_UTF8_CACHE.computeIfAbsent(state, s -> serializeBlockState(s).getBytes(StandardCharsets.UTF_8));
+                    crc.update(stateBytes);
+
+                    // Quart-level 3D Biome sampling cache
+                    long quartKey = (((long) (worldX >> 2) & 0x3FFFFF) << 42)
+                            | (((long) (worldY >> 2) & 0x3FFFFF) << 21)
+                            | (((long) (worldZ >> 2) & 0x3FFFFF));
+                    String biomeId = quartBiomeCache.get(quartKey);
+                    if (biomeId == null) {
+                        biomeId = getBiomeId(level, mutablePos);
+                        quartBiomeCache.put(quartKey, biomeId);
+                    }
+
                     Integer biomeIdx = biomeToIdx.get(biomeId);
                     if (biomeIdx == null) {
                         biomeIdx = biomePalette.size();
@@ -368,6 +397,9 @@ public class BlockDataEncoder {
                 }
             }
         }
+
+        // Cache the pipelined CRC32 immediately, completely avoiding repeated rescans in encodeSectionManifest
+        SECTION_CRC_CACHE.put(secPos, crc.getValue());
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (DataOutputStream out = new DataOutputStream(baos)) {

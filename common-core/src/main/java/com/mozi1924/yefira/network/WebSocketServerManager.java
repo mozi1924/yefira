@@ -146,6 +146,18 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
 
         @Override
+        protected boolean onConnect(java.nio.channels.SelectionKey key) {
+            java.nio.channels.SelectableChannel channel = key.channel();
+            if (channel instanceof java.nio.channels.SocketChannel sc) {
+                try {
+                    sc.setOption(java.net.StandardSocketOptions.TCP_NODELAY, true);
+                } catch (Exception ignored) {
+                }
+            }
+            return super.onConnect(key);
+        }
+
+        @Override
         public void onOpen(WebSocket conn, ClientHandshake handshake) {
             clients.add(conn);
             clientConfigs.put(conn, new ClientConfig());

@@ -41,4 +41,13 @@ public class LevelCompat26 implements ILevelCompat {
     public int getMaxSectionY(Level level) {
         return level.getMaxSectionY();
     }
+
+    @Override
+    public boolean hasAdminPermission(net.minecraft.commands.CommandSourceStack source) {
+        if (source.getServer() != null && !source.getServer().isDedicatedServer()) {
+            return true;
+        }
+        return source.permissions() != null &&
+                source.permissions().hasPermission(net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER);
+    }
 }

@@ -18,11 +18,7 @@ import net.minecraft.network.chat.Component;
 public class SelectionCommand {
 
     private static boolean hasAdminPermission(CommandSourceStack source) {
-        if (source.getServer() != null && !source.getServer().isDedicatedServer()) {
-            return true;
-        }
-        return source.permissions() != null &&
-                source.permissions().hasPermission(net.minecraft.server.permissions.Permissions.COMMANDS_GAMEMASTER);
+        return com.mozi1924.yefira.compat.VersionCompat.level().hasAdminPermission(source);
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

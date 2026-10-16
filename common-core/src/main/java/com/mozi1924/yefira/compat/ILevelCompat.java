@@ -40,4 +40,9 @@ public interface ILevelCompat {
      * Returns the maximum chunk section coordinate on the Y axis.
      */
     int getMaxSectionY(Level level);
+
+    /**
+     * Checks if the command source has administrative/operator permissions.
+     */
+    boolean hasAdminPermission(net.minecraft.commands.CommandSourceStack source);
 }

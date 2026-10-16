@@ -14,9 +14,45 @@ def findJavaHome(int targetVersion) {
         return System.getenv(envVar)
     }
 
+    // 1. Check user gradle auto-downloaded jdks (~/.gradle/jdks)
+    def userHome = System.getProperty('user.home')
+    if (userHome) {
+        def gradleJdksDir = new File(userHome, '.gradle/jdks')
+        if (gradleJdksDir.exists() && gradleJdksDir.isDirectory()) {
+            def matches = gradleJdksDir.listFiles()?.findAll { f ->
+                f.isDirectory() && (f.name.contains("-${targetVersion}-") || f.name.contains("jdk-${targetVersion}"))
+            } ?: []
+            for (File match : matches) {
+                // macOS layout: Contents/Home
+                def foundHome = match.listFiles()?.find { sub -> new File(sub, 'Contents/Home').exists() }
+                if (foundHome) {
+                    return new File(foundHome, 'Contents/Home').absolutePath
+                }
+                if (new File(match, project.ext.isWindows ? 'bin/java.exe' : 'bin/java').exists()) {
+                    return match.absolutePath
+                }
+            }
+        }
+    }
+
+    // 2. macOS /usr/libexec/java_home
+    if (Os.isFamily(Os.FAMILY_MAC)) {
+        try {
+            def proc = ["/usr/libexec/java_home", "-v", "${targetVersion}"].execute()
+            proc.waitFor()
+            if (proc.exitValue() == 0) {
+                def out = proc.text.trim()
+                if (out && new File(out).exists()) {
+                    return out
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // 3. Common Linux / system candidates
     def candidates = [
         17: ['/usr/lib/jvm/java-17-temurin-jdk', '/usr/lib/jvm/temurin-17-jdk', '/usr/lib/jvm/java-17-openjdk'],
-        21: ['/home/mozi/.gradle/jdks/eclipse_adoptium-21-amd64-linux.2', '/usr/lib/jvm/java-21-openjdk'],
+        21: ['/usr/lib/jvm/java-21-openjdk', '/usr/lib/jvm/temurin-21-jdk'],
         25: ['/usr/lib/jvm/java-25-openjdk', '/usr/lib/jvm/java-25']
     ]
 
