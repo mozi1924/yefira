@@ -342,17 +342,28 @@ public class BlockDataEncoder {
         List<String> palette = new ArrayList<>();
         Map<BlockState, Integer> stateToPaletteIdx = new IdentityHashMap<>();
 
+        // Extract 64 quart 3D biomes (4x4x4) directly from section container, exactly matching Save Import format
+        String[] quartBiomes = VersionCompat.level().getSectionQuartBiomes(level, secPos.x, secPos.y, secPos.z);
         List<String> biomePalette = new ArrayList<>();
         Map<String, Integer> biomeToIdx = new HashMap<>();
+        int[] biomeIndices = new int[64];
+        for (int i = 0; i < 64; i++) {
+            String bId = (quartBiomes != null && quartBiomes[i] != null) ? quartBiomes[i] : "minecraft:plains";
+            Integer bIdx = biomeToIdx.get(bId);
+            if (bIdx == null) {
+                bIdx = biomePalette.size();
+                biomePalette.add(bId);
+                biomeToIdx.put(bId, bIdx);
+            }
+            biomeIndices[i] = bIdx;
+        }
 
         int totalBlocks = sizeX * sizeY * sizeZ;
         int[] gridIndices = new int[totalBlocks];
-        int[] biomeIndices = new int[totalBlocks];
 
         int index = 0;
         BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
         java.util.zip.CRC32 crc = new java.util.zip.CRC32();
-        Map<Long, String> quartBiomeCache = new HashMap<>(64);
 
         for (int x = 0; x < sizeX; x++) {
             for (int y = 0; y < sizeY; y++) {
@@ -374,25 +385,7 @@ public class BlockDataEncoder {
                     byte[] stateBytes = STATE_UTF8_CACHE.computeIfAbsent(state, s -> serializeBlockState(s).getBytes(StandardCharsets.UTF_8));
                     crc.update(stateBytes);
 
-                    // Quart-level 3D Biome sampling cache
-                    long quartKey = (((long) (worldX >> 2) & 0x3FFFFF) << 42)
-                            | (((long) (worldY >> 2) & 0x3FFFFF) << 21)
-                            | (((long) (worldZ >> 2) & 0x3FFFFF));
-                    String biomeId = quartBiomeCache.get(quartKey);
-                    if (biomeId == null) {
-                        biomeId = getBiomeId(level, mutablePos);
-                        quartBiomeCache.put(quartKey, biomeId);
-                    }
-
-                    Integer biomeIdx = biomeToIdx.get(biomeId);
-                    if (biomeIdx == null) {
-                        biomeIdx = biomePalette.size();
-                        biomePalette.add(biomeId);
-                        biomeToIdx.put(biomeId, biomeIdx);
-                    }
-
                     gridIndices[index] = paletteIdx;
-                    biomeIndices[index] = biomeIdx;
                     index++;
                 }
             }
@@ -449,15 +442,11 @@ public class BlockDataEncoder {
             }
 
             // Biome Indices (only write index stream if palette > 1)
+            // 64-quart biomes always use byte index (format 1, since 64 <= 256)
             if (biomePalette.size() > 1) {
-                boolean isByteBiome = biomePalette.size() <= 256;
-                out.writeByte(isByteBiome ? 1 : 2);
+                out.writeByte(1);
                 for (int bIdx : biomeIndices) {
-                    if (isByteBiome) {
-                        out.writeByte(bIdx & 0xFF);
-                    } else {
-                        writeShortLE(out, bIdx);
-                    }
+                    out.writeByte(bIdx & 0xFF);
                 }
             }
             out.flush();

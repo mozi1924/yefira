@@ -46,4 +46,44 @@ public class LevelCompat1204 implements ILevelCompat {
     public boolean hasAdminPermission(net.minecraft.commands.CommandSourceStack source) {
         return (source.getServer() != null && !source.getServer().isDedicatedServer()) || source.hasPermission(2);
     }
+
+    @Override
+    public String[] getSectionQuartBiomes(Level level, int secX, int secY, int secZ) {
+        String[] biomes = new String[64];
+        net.minecraft.world.level.chunk.LevelChunk chunk = level.getChunk(secX, secZ);
+        net.minecraft.world.level.chunk.LevelChunkSection section = null;
+        if (chunk != null) {
+            int secIdx = level.getSectionIndexFromSectionY(secY);
+            net.minecraft.world.level.chunk.LevelChunkSection[] sections = chunk.getSections();
+            if (secIdx >= 0 && secIdx < sections.length) {
+                section = sections[secIdx];
+            }
+        }
+
+        if (section != null && section.getBiomes() != null) {
+            var palettedContainer = section.getBiomes();
+            for (int qy = 0; qy < 4; qy++) {
+                for (int qz = 0; qz < 4; qz++) {
+                    for (int qx = 0; qx < 4; qx++) {
+                        int idx = (qy << 4) | (qz << 2) | qx;
+                        net.minecraft.core.Holder<net.minecraft.world.level.biome.Biome> holder = palettedContainer.get(qx, qy, qz);
+                        String biomeId = holder.unwrapKey().map(k -> k.location().toString()).orElse("minecraft:plains");
+                        biomes[idx] = biomeId;
+                    }
+                }
+            }
+        } else {
+            for (int qy = 0; qy < 4; qy++) {
+                for (int qz = 0; qz < 4; qz++) {
+                    for (int qx = 0; qx < 4; qx++) {
+                        int idx = (qy << 4) | (qz << 2) | qx;
+                        net.minecraft.core.Holder<net.minecraft.world.level.biome.Biome> holder = level.getNoiseBiome((secX << 2) + qx, (secY << 2) + qy, (secZ << 2) + qz);
+                        String biomeId = holder.unwrapKey().map(k -> k.location().toString()).orElse("minecraft:plains");
+                        biomes[idx] = biomeId;
+                    }
+                }
+            }
+        }
+        return biomes;
+    }
 }

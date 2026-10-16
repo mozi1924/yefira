@@ -45,4 +45,10 @@ public interface ILevelCompat {
      * Checks if the command source has administrative/operator permissions.
      */
     boolean hasAdminPermission(net.minecraft.commands.CommandSourceStack source);
+
+    /**
+     * Retrieves the 64 quart biomes (4x4x4) for the given section (secX, secY, secZ).
+     * Returns an array of 64 namespaced biome IDs indexed as (qy &lt;&lt; 4) | (qz &lt;&lt; 2) | qx.
+     */
+    String[] getSectionQuartBiomes(Level level, int secX, int secY, int secZ);
 }

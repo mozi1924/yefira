@@ -39,7 +39,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private final Map<BlockPos, BlockDataEncoder.BlockChangeEntry> pendingDeltaChanges = new LinkedHashMap<>();
     private SelectionBox pendingDeltaSelection;
     private long lastManifestBroadcastTick = 0;
-    private boolean hasEditsSinceLastManifest = false;
     private final AtomicLong globalSeqId = new AtomicLong(1);
 
     public static class ClientConfig {
@@ -165,7 +164,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
             SelectionManager selectionManager = SelectionManager.getInstance();
             if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                streamingExecutor.submit(() -> sendHandshakeManifestToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
+                streamingExecutor.submit(() -> sendSnapshotToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
             }
         }
 
@@ -447,20 +446,20 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     private void sendSnapshotToClient(WebSocket conn, Level level, SelectionBox selection) {
         try {
+            BlockDataEncoder.clearSectionCRCCache();
             long snapshotSeqId = globalSeqId.incrementAndGet();
             long volume = selection.getVolume();
 
             byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
             if (!sendSafe(conn, infoBytes)) return;
 
-            if (volume <= 32768) {
-                byte[] snapshotBytes = BlockDataEncoder.encodeFullSnapshot(level, selection);
-                sendSafe(conn, snapshotBytes);
-                byte[] endPacket = BlockDataEncoder.encodeStreamEnd(snapshotSeqId, 1, BlockDataEncoder.STREAM_STATUS_SUCCESS);
-                sendSafe(conn, endPacket);
-            } else {
-                BlockDataEncoder.streamNonEmptySectionSnapshots(level, selection, snapshotSeqId, () -> !conn.isOpen(), bytes -> sendSafe(conn, bytes));
-            }
+            int totalSections = BlockDataEncoder.getCoveredSections(selection).size();
+            int nonEmptySections = BlockDataEncoder.countNonEmptySections(level, selection);
+            String dimName = VersionCompat.level().getDimensionId(level);
+            byte[] handshakeBytes = BlockDataEncoder.encodeHandshakeInfo(totalSections, nonEmptySections, volume, dimName, 0);
+            if (!sendSafe(conn, handshakeBytes)) return;
+
+            BlockDataEncoder.streamNonEmptySectionSnapshots(level, selection, snapshotSeqId, () -> !conn.isOpen(), bytes -> sendSafe(conn, bytes));
 
             // Post-stream Manifest for final end-to-end verification
             byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
@@ -484,30 +483,29 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 sendSafe(client, infoBytes);
             }
 
-            if (volume <= 32768) {
-                byte[] snapshotBytes = BlockDataEncoder.encodeFullSnapshot(level, selection);
-                byte[] endPacket = BlockDataEncoder.encodeStreamEnd(snapshotSeqId, 1, BlockDataEncoder.STREAM_STATUS_SUCCESS);
-                for (WebSocket client : List.copyOf(clients)) {
-                    sendSafe(client, snapshotBytes);
-                    sendSafe(client, endPacket);
-                }
-            } else {
-                BlockDataEncoder.streamNonEmptySectionSnapshots(
-                        level,
-                        selection,
-                        snapshotSeqId,
-                        () -> activeBroadcastStreamId.get() != snapshotSeqId,
-                        bytes -> {
-                            boolean anySuccess = false;
-                            for (WebSocket client : List.copyOf(clients)) {
-                                if (sendSafe(client, bytes)) {
-                                    anySuccess = true;
-                                }
-                            }
-                            return anySuccess || clients.isEmpty();
-                        }
-                );
+            int totalSections = BlockDataEncoder.getCoveredSections(selection).size();
+            int nonEmptySections = BlockDataEncoder.countNonEmptySections(level, selection);
+            String dimName = VersionCompat.level().getDimensionId(level);
+            byte[] handshakeBytes = BlockDataEncoder.encodeHandshakeInfo(totalSections, nonEmptySections, volume, dimName, 0);
+            for (WebSocket client : List.copyOf(clients)) {
+                sendSafe(client, handshakeBytes);
             }
+
+            BlockDataEncoder.streamNonEmptySectionSnapshots(
+                    level,
+                    selection,
+                    snapshotSeqId,
+                    () -> activeBroadcastStreamId.get() != snapshotSeqId,
+                    bytes -> {
+                        boolean anySuccess = false;
+                        for (WebSocket client : List.copyOf(clients)) {
+                            if (sendSafe(client, bytes)) {
+                                anySuccess = true;
+                            }
+                        }
+                        return anySuccess || clients.isEmpty();
+                    }
+            );
 
             // Post-stream Manifest for final verification across all clients
             byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
@@ -537,9 +535,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         SelectionManager selectionManager = SelectionManager.getInstance();
         if (!selectionManager.hasSelection() || selectionManager.getCurrentLevel() == null) return;
 
-        if (hasEditsSinceLastManifest && currentTick - lastManifestBroadcastTick >= 20) {
+        // Periodic background consistency check every 30 seconds (600 ticks)
+        if (currentTick - lastManifestBroadcastTick >= 600) {
             lastManifestBroadcastTick = currentTick;
-            hasEditsSinceLastManifest = false;
             broadcastManifest(selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
         }
     }
@@ -547,7 +545,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public void broadcastDeltaUpdate(SelectionBox selection, List<BlockDataEncoder.BlockChangeEntry> changes) {
         if (clients.isEmpty() || changes.isEmpty()) return;
         try {
-            hasEditsSinceLastManifest = true;
             long seqId = globalSeqId.incrementAndGet();
             byte[] deltaBytes = BlockDataEncoder.encodeDeltaUpdate(selection, changes, seqId);
             for (WebSocket client : List.copyOf(clients)) {
@@ -579,7 +576,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 List<BlockDataEncoder.BlockChangeEntry> changes = List.copyOf(pendingDeltaChanges.values());
                 pendingDeltaChanges.clear();
                 pendingDeltaSelection = null;
-                hasEditsSinceLastManifest = true;
 
                 SelectionManager selectionManager = SelectionManager.getInstance();
                 Level level = selectionManager.getCurrentLevel();
