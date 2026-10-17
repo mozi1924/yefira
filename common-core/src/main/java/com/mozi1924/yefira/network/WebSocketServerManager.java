@@ -698,7 +698,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 byte[] chunkPayload = new byte[len];
                 System.arraycopy(payload, offset, chunkPayload, 0, len);
 
-                long firstVoxelIdx = (long) chunkIdx * voxelsPerChunk;
+                // Clamp the cursor to the exact voxel count. Without this, a trailing
+                // biome-only chunk reports `k * voxelsPerChunk` (> totalVoxels) and the
+                // client rejects the stream as a sequence gap (endless resync).
+                long firstVoxelIdx = Math.min((long) chunkIdx * voxelsPerChunk, scan.totalVoxels);
                 int voxelCnt = (int) Math.min((long) voxelsPerChunk, Math.max(0, scan.totalVoxels - firstVoxelIdx));
 
                 XXHash64 chunkHasher = new XXHash64(0);
