@@ -112,7 +112,8 @@ public class CanonicalVoxelScanner {
      * - Y is slowest-varying axis (bottom-up scanning of horizontal slices)
      */
     public static long computeCanonicalStateHash(Level level, SelectionBox box, String dimension) {
-        return scanBaseline(level, box, dimension).stateHash;
+        BaselineScanResult result = scanBaseline(level, box, dimension);
+        return result != null ? result.stateHash : 0L;
     }
 
     /**
@@ -121,6 +122,21 @@ public class CanonicalVoxelScanner {
      * High-performance chunk-grid accelerated implementation.
      */
     public static BaselineScanResult scanBaseline(Level level, SelectionBox box, String dimension) {
+        return scanBaseline(level, box, dimension, () -> false);
+    }
+
+    /**
+     * Cancellable scan variant. When {@code cancelled} becomes true (e.g. the user moved
+     * the selection while a large baseline was being scanned) the scan aborts early and
+     * returns {@code null}. This prevents unbounded concurrent scans and stale snapshots
+     * from saturating CPU / heap on rapid selection drags.
+     */
+    public static BaselineScanResult scanBaseline(
+            Level level,
+            SelectionBox box,
+            String dimension,
+            java.util.function.BooleanSupplier cancelled
+    ) {
         BlockPos min = box.getMin();
         int minX = min.getX();
         int minY = min.getY();
@@ -170,6 +186,9 @@ public class CanonicalVoxelScanner {
         LevelChunk[][] chunkGrid = new LevelChunk[chunksW][chunksD];
         for (int cz = minSecZ; cz <= maxSecZ; cz++) {
             for (int cx = minSecX; cx <= maxSecX; cx++) {
+                if (cancelled.getAsBoolean()) {
+                    return null;
+                }
                 try {
                     chunkGrid[cx - minSecX][cz - minSecZ] = level.getChunk(cx, cz);
                 } catch (Exception ignored) {
@@ -179,6 +198,10 @@ public class CanonicalVoxelScanner {
 
         // 2. Voxel Scan (Y bottom-up, Z next, X fastest)
         for (int y = minY; y < maxY; y++) {
+            // Cooperative cancellation: checked once per horizontal slice (16x16 blocks).
+            if (((y - minY) & 15) == 0 && cancelled.getAsBoolean()) {
+                return null;
+            }
             int secY = y >> 4;
             int sectionIdx = level.getSectionIndexFromSectionY(secY);
             int ly = y & 15;
@@ -252,6 +275,9 @@ public class CanonicalVoxelScanner {
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
         for (int qy = 0; qy < qh; qy++) {
+            if (cancelled.getAsBoolean()) {
+                return null;
+            }
             for (int qz = 0; qz < qd; qz++) {
                 for (int qx = 0; qx < qw; qx++) {
                     pos.set(minX + (qx * 4), minY + (qy * 4), minZ + (qz * 4));

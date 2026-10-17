@@ -41,7 +41,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     // RFC v3.1 Session State
     private final byte[] serverUuidBytes = new byte[16];
     private long epoch = 1;
-    private long cachedStateHash = 0;
+    private volatile long cachedStateHash = 0;
     private final Object paletteLock = new Object();
     private final Map<String, Integer> blockPaletteLookup = new HashMap<>();
     private final List<String> blockPaletteList = new ArrayList<>();
@@ -54,9 +54,46 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     private final Map<WebSocket, ClientConfig> clientConfigs = new ConcurrentHashMap<>();
-    private final java.util.concurrent.ExecutorService streamingExecutor = java.util.concurrent.Executors.newCachedThreadPool();
-    private final java.util.concurrent.atomic.AtomicLong activeBroadcastStreamId = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>> activeBroadcastFuture = new java.util.concurrent.atomic.AtomicReference<>();
+
+    /**
+     * Baseline scanning/serialization pool. All worker threads are daemons and each
+     * task cooperatively aborts as soon as a newer selection/stream generation is
+     * published, so rapid selection drags cannot pile up expensive scans forever.
+     */
+    private volatile java.util.concurrent.ExecutorService streamingExecutor = createStreamingExecutor();
+
+    /** Incremented whenever the selection changes so stale scans stop immediately. */
+    private final AtomicLong selectionGeneration = new AtomicLong(1);
+
+    /** Per-client stream generation; a newer baseline for the same client supersedes older ones. */
+    private final Map<WebSocket, AtomicLong> clientStreamGenerations = new ConcurrentHashMap<>();
+
+    /** Per-client frame lock guarantees a single interleaving-free baseline stream. */
+    private final Map<WebSocket, Object> clientSendLocks = new ConcurrentHashMap<>();
+
+    /**
+     * Number of baseline streams that are currently scanning/serializing. Delta
+     * broadcasts are deferred while > 0 so that every delta is encoded against the
+     * palette that belongs to the snapshot the client is about to receive.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger activeBaselineStreams =
+            new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /** Set when block changes overflowed the deferred queue during a long baseline. */
+    private boolean pendingDeltaOverflow = false;
+    private static final int MAX_PENDING_DELTA_CHANGES = 262_144;
+
+    private static java.util.concurrent.ExecutorService createStreamingExecutor() {
+        // Bounded worker count: baseline scans allocate int[] voxel buffers, so an
+        // unbounded cached pool on rapid selection drags could exhaust the heap.
+        // Superseded tasks abort at their first generation check and free the slot
+        // almost immediately.
+        return java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
+            Thread t = new Thread(r, "Yefira-LiveSync-Stream");
+            t.setDaemon(true);
+            return t;
+        });
+    }
 
     public static WebSocketServerManager getInstance() {
         return INSTANCE;
@@ -132,8 +169,20 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public synchronized void stopServer() {
         SelectionManager.getInstance().removeListener(this);
         clearPendingDeltaChanges();
+
+        // Abort every in-flight baseline scan/stream before tearing the server down.
+        selectionGeneration.incrementAndGet();
+        for (WebSocket client : List.copyOf(clients)) {
+            cancelClientStream(client);
+        }
         clientConfigs.clear();
         clients.clear();
+        clientStreamGenerations.clear();
+        clientSendLocks.clear();
+
+        java.util.concurrent.ExecutorService executor = streamingExecutor;
+        streamingExecutor = createStreamingExecutor();
+        executor.shutdownNow();
 
         if (serverImpl != null) {
             try {
@@ -175,8 +224,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
         @Override
         public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-            clients.remove(conn);
-            clientConfigs.remove(conn);
+            cleanupClient(conn);
             Yefira.LOGGER.info("DCC client disconnected: {}", conn.getRemoteSocketAddress());
         }
 
@@ -197,8 +245,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     PongFrame resp = f instanceof PingFrame ? new PongFrame((PingFrame) f) : new PongFrame();
                     conn.sendFrame(resp);
                 } catch (WebsocketNotConnectedException ignored) {
-                    clients.remove(conn);
-                    clientConfigs.remove(conn);
+                    cleanupClient(conn);
                 } catch (Exception e) {
                     Yefira.LOGGER.debug("Error sending pong response to DCC client: {}", e.getMessage());
                 }
@@ -213,8 +260,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         @Override
         public void onError(WebSocket conn, Exception ex) {
             if (conn != null) {
-                clients.remove(conn);
-                clientConfigs.remove(conn);
+                cleanupClient(conn);
             }
             if (ex instanceof WebsocketNotConnectedException) {
                 Yefira.LOGGER.debug("WebSocket client disconnected: {}", conn != null ? conn.getRemoteSocketAddress() : "unknown");
@@ -235,8 +281,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public boolean sendSafe(WebSocket conn, byte[] data) {
         if (conn == null || !conn.isOpen()) {
             if (conn != null) {
-                clients.remove(conn);
-                clientConfigs.remove(conn);
+                cleanupClient(conn);
             }
             return false;
         }
@@ -244,14 +289,87 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             conn.send(data);
             return true;
         } catch (WebsocketNotConnectedException e) {
-            clients.remove(conn);
-            clientConfigs.remove(conn);
+            cleanupClient(conn);
             return false;
         } catch (Exception e) {
             Yefira.LOGGER.warn("Failed to send data to client {}: {}", conn.getRemoteSocketAddress(), e.getMessage());
-            clients.remove(conn);
-            clientConfigs.remove(conn);
+            cleanupClient(conn);
             return false;
+        }
+    }
+
+    /**
+     * Removes all per-connection bookkeeping (clients, config, stream generations and send locks).
+     */
+    private void cleanupClient(WebSocket conn) {
+        if (conn == null) return;
+        clients.remove(conn);
+        clientConfigs.remove(conn);
+        clientStreamGenerations.remove(conn);
+        clientSendLocks.remove(conn);
+    }
+
+    /**
+     * Invalidates any in-flight baseline stream for a single client.
+     */
+    private void cancelClientStream(WebSocket conn) {
+        AtomicLong gen = clientStreamGenerations.get(conn);
+        if (gen != null) {
+            gen.incrementAndGet();
+        }
+    }
+
+    private AtomicLong streamGenerationOf(WebSocket conn) {
+        return clientStreamGenerations.computeIfAbsent(conn, k -> new AtomicLong(0));
+    }
+
+    private Object sendLockOf(WebSocket conn) {
+        return clientSendLocks.computeIfAbsent(conn, k -> new Object());
+    }
+
+    /**
+     * Starts a new baseline stream generation for one client. Any previously running
+     * stream for the same client is invalidated before the task is enqueued.
+     */
+    public void startBaselineStream(WebSocket conn, Level level, SelectionBox selection) {
+        if (conn == null || !conn.isOpen() || level == null || selection == null) {
+            return;
+        }
+        long streamGen = streamGenerationOf(conn).incrementAndGet();
+        long selectionGen = selectionGeneration.get();
+        activeBaselineStreams.incrementAndGet();
+        try {
+            streamingExecutor.submit(() -> {
+                try {
+                    streamBaseline(conn, level, selection, streamGen, selectionGen);
+                } finally {
+                    activeBaselineStreams.decrementAndGet();
+                }
+            });
+        } catch (Exception e) {
+            activeBaselineStreams.decrementAndGet();
+            Yefira.LOGGER.error("Failed to schedule baseline stream", e);
+        }
+    }
+
+    private boolean isStreamCurrent(WebSocket conn, long streamGen, long selectionGen) {
+        if (conn == null || !conn.isOpen()) {
+            return false;
+        }
+        if (selectionGeneration.get() != selectionGen) {
+            return false;
+        }
+        AtomicLong gen = clientStreamGenerations.get(conn);
+        return gen != null && gen.get() == streamGen;
+    }
+
+    private boolean sendStreamFrame(WebSocket conn, long streamGen, long selectionGen, byte[] data) {
+        Object lock = sendLockOf(conn);
+        synchronized (lock) {
+            if (!isStreamCurrent(conn, streamGen, selectionGen)) {
+                return false;
+            }
+            return sendSafe(conn, data);
         }
     }
 
@@ -261,8 +379,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public boolean sendSafe(WebSocket conn, String data) {
         if (conn == null || !conn.isOpen()) {
             if (conn != null) {
-                clients.remove(conn);
-                clientConfigs.remove(conn);
+                cleanupClient(conn);
             }
             return false;
         }
@@ -270,13 +387,11 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             conn.send(data);
             return true;
         } catch (WebsocketNotConnectedException e) {
-            clients.remove(conn);
-            clientConfigs.remove(conn);
+            cleanupClient(conn);
             return false;
         } catch (Exception e) {
             Yefira.LOGGER.warn("Failed to send data to client {}: {}", conn.getRemoteSocketAddress(), e.getMessage());
-            clients.remove(conn);
-            clientConfigs.remove(conn);
+            cleanupClient(conn);
             return false;
         }
     }
@@ -288,7 +403,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             } else if ("REFRESH".equalsIgnoreCase(message.trim())) {
                 SelectionManager selectionManager = SelectionManager.getInstance();
                 if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                    streamingExecutor.submit(() -> sendBaselineToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
+                    startBaselineStream(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
                 }
             }
         } catch (Exception e) {
@@ -334,14 +449,37 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             }
 
             if (packetType == BlockDataEncoder.OPCODE_BASELINE_ACK) {
-                Yefira.LOGGER.info("Client {} acknowledged baseline commit", conn.getRemoteSocketAddress());
+                if (message.remaining() >= 1) {
+                    // epoch(8) + snapshot_uuid(16) + committed_seq(8) + result_code(1)
+                    if (message.remaining() >= 33) {
+                        message.position(message.position() + 32);
+                        byte resultCode = message.get();
+                        if (resultCode != 0) {
+                            Yefira.LOGGER.warn("Client {} rejected the baseline (result code {}); next RESYNC will stream a fresh snapshot",
+                                    conn.getRemoteSocketAddress(), resultCode);
+                        } else {
+                            Yefira.LOGGER.info("Client {} committed baseline snapshot", conn.getRemoteSocketAddress());
+                        }
+                    } else {
+                        Yefira.LOGGER.info("Client {} acknowledged baseline commit", conn.getRemoteSocketAddress());
+                    }
+                }
+                return;
+            }
+
+            if (packetType == BlockDataEncoder.OPCODE_CANCEL) {
+                // The DCC client aborted the current baseline (e.g. selection too large).
+                // Stop streaming immediately instead of pushing the rest of the snapshot.
+                cancelClientStream(conn);
+                Yefira.LOGGER.info("Client {} cancelled the baseline stream", conn.getRemoteSocketAddress());
                 return;
             }
 
             if (packetType == BlockDataEncoder.OPCODE_RESYNC_REQUEST || packetType == BlockDataEncoder.PACKET_C2S_REQ_FULL_SYNC) {
                 SelectionManager sm = SelectionManager.getInstance();
                 if (sm.hasSelection() && sm.getCurrentLevel() != null) {
-                    streamingExecutor.submit(() -> sendBaselineToClient(conn, sm.getCurrentLevel(), sm.getCurrentSelection()));
+                    // Supersede any in-flight stream for this client before starting a new one.
+                    startBaselineStream(conn, sm.getCurrentLevel(), sm.getCurrentSelection());
                 }
                 return;
             }
@@ -419,7 +557,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     dimension
             );
             if (sendSafe(conn, welcome)) {
-                streamingExecutor.submit(() -> sendBaselineToClient(conn, level, selection));
+                startBaselineStream(conn, level, selection);
             }
         }
     }
@@ -430,45 +568,75 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public void onSelectionChanged(Level level, SelectionBox selection) {
         clearPendingDeltaChanges();
         cachedStateHash = 0;
+        // Invalidate every scan/stream that is still working on the previous selection.
+        selectionGeneration.incrementAndGet();
         if (clients.isEmpty()) return;
 
-        long newStreamId = globalSeqId.incrementAndGet();
-        activeBroadcastStreamId.set(newStreamId);
-
-        java.util.concurrent.Future<?> prevTask = activeBroadcastFuture.getAndSet(null);
-        if (prevTask != null && !prevTask.isDone()) {
-            prevTask.cancel(true);
-        }
-
-        Yefira.LOGGER.info("Broadcasting baseline for new selection (Stream {}) to {} clients...", newStreamId, clients.size());
-        java.util.concurrent.Future<?> future = streamingExecutor.submit(() -> broadcastBaseline(level, selection));
-        activeBroadcastFuture.set(future);
+        Yefira.LOGGER.info("Broadcasting baseline for new selection to {} clients...", clients.size());
+        broadcastBaseline(level, selection);
     }
 
     @Override
     public void onSelectionCleared() {
         clearPendingDeltaChanges();
         cachedStateHash = 0;
-        if (clients.isEmpty()) return;
-        java.util.concurrent.Future<?> prevTask = activeBroadcastFuture.getAndSet(null);
-        if (prevTask != null && !prevTask.isDone()) {
-            prevTask.cancel(true);
-        }
+        selectionGeneration.incrementAndGet();
     }
 
     // --- 数据发送辅助方法 ---
 
+    /**
+     * Asynchronously streams the current selection baseline to every connected client.
+     * Never blocks the Minecraft main/command thread.
+     */
     public void broadcastBaseline(Level level, SelectionBox selection) {
         if (clients.isEmpty() || level == null || selection == null) return;
         for (WebSocket client : List.copyOf(clients)) {
-            sendBaselineToClient(client, level, selection);
+            startBaselineStream(client, level, selection);
         }
     }
 
-    private void sendBaselineToClient(WebSocket conn, Level level, SelectionBox selection) {
+    private void streamBaseline(WebSocket conn, Level level, SelectionBox selection,
+                                long streamGen, long selectionGen) {
         try {
+            if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+
+            // Hard protocol guard: never scan/allocate a selection that the DCC
+            // client will reject, and never OOM the Minecraft process on a runaway box.
+            long volume = selection.getVolume();
+            if (volume > BlockDataEncoder.MAX_SELECTION_VOLUME) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
+                        "Selection volume " + volume + " exceeds the "
+                                + BlockDataEncoder.MAX_SELECTION_VOLUME
+                                + " voxel Live Sync limit; shrink the selection"));
+                Yefira.LOGGER.warn("Refusing to stream oversized selection ({} voxels) to {}",
+                        volume, conn.getRemoteSocketAddress());
+                return;
+            }
+
+            // Capture the snapshot barrier BEFORE scanning. Any block change applied
+            // while the (potentially long) scan is running then receives a sequence
+            // number greater than the snapshot and is replayed by the client.
+            // Serialized with delta broadcasts so no delta can be encoded against the
+            // old palette with a sequence > this snapshot barrier.
+            long snapshotSeq;
+            synchronized (paletteLock) {
+                snapshotSeq = globalSeqId.get();
+            }
+
             String dimension = VersionCompat.level().getDimensionId(level);
-            CanonicalVoxelScanner.BaselineScanResult scan = CanonicalVoxelScanner.scanBaseline(level, selection, dimension);
+            CanonicalVoxelScanner.BaselineScanResult scan = CanonicalVoxelScanner.scanBaseline(
+                    level, selection, dimension,
+                    () -> !isStreamCurrent(conn, streamGen, selectionGen)
+            );
+            if (scan == null) {
+                Yefira.LOGGER.debug("Baseline scan for {} aborted (superseded)", conn.getRemoteSocketAddress());
+                return;
+            }
+            if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+
             cachedStateHash = scan.stateHash;
 
             synchronized (paletteLock) {
@@ -482,7 +650,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 paletteRevision = 1;
             }
 
-            long snapshotSeq = globalSeqId.get();
             byte[] snapshotUuid = new byte[16];
             new Random().nextBytes(snapshotUuid);
 
@@ -509,13 +676,18 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     scan.blockPalette,
                     scan.biomePalette
             );
-            if (!sendSafe(conn, beginPkt)) return;
+            if (!sendStreamFrame(conn, streamGen, selectionGen, beginPkt)) return;
 
             int bytesPerVoxel = Math.max(1, scan.paletteBitsPerBlock / 8);
             int voxelsPerChunk = chunkSize / bytesPerVoxel;
 
             for (int chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-                if (!conn.isOpen()) break;
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+                if (!isStreamCurrent(conn, streamGen, selectionGen)) {
+                    return;
+                }
                 int offset = chunkIdx * chunkSize;
                 int len = Math.min(chunkSize, totalBytes - offset);
                 byte[] chunkPayload = new byte[len];
@@ -539,7 +711,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                         chunkHash,
                         chunkPayload
                 );
-                if (!sendSafe(conn, chunkPkt)) return;
+                if (!sendStreamFrame(conn, streamGen, selectionGen, chunkPkt)) return;
             }
 
             byte[] endPkt = BlockDataEncoder.encodeBaselineEnd(
@@ -550,9 +722,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     scan.stateHash,
                     (byte) 0
             );
-            sendSafe(conn, endPkt);
-            Yefira.LOGGER.info("Baseline streamed to client {} ({} bytes, {} chunks, hash=0x{})",
-                    conn.getRemoteSocketAddress(), totalBytes, totalChunks, Long.toHexString(scan.stateHash));
+            if (sendStreamFrame(conn, streamGen, selectionGen, endPkt)) {
+                Yefira.LOGGER.info("Baseline streamed to client {} ({} bytes, {} chunks, hash=0x{})",
+                        conn.getRemoteSocketAddress(), totalBytes, totalChunks, Long.toHexString(scan.stateHash));
+            }
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to stream baseline to client {}", conn.getRemoteSocketAddress(), e);
         }
@@ -562,15 +735,30 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         // Heartbeats handled via native WebSocket ping/pong
     }
 
-    public void broadcastDeltaUpdate(SelectionBox selection, List<BlockDataEncoder.BlockChangeEntry> changes) {
-        if (clients.isEmpty() || changes.isEmpty()) return;
+    /**
+     * Broadcasts a delta batch to all clients.
+     * @return false when the batch was deferred because a baseline palette is being
+     *         (re)installed; the caller must keep the changes queued and retry later.
+     */
+    public boolean broadcastDeltaUpdate(SelectionBox selection, List<BlockDataEncoder.BlockChangeEntry> changes) {
+        if (clients.isEmpty() || changes.isEmpty()) return true;
         try {
-            long seqId = globalSeqId.incrementAndGet();
-            List<Map.Entry<Integer, String>> newPaletteEntries = new ArrayList<>();
-            List<BlockDataEncoder.DeltaEntry> deltaEntries = new ArrayList<>(changes.size());
+            byte[] palPkt = null;
+            byte[] deltaPkt;
 
-            BlockPos min = selection.getMin();
             synchronized (paletteLock) {
+                // Re-check under the palette lock: a baseline may have started between
+                // the caller's fast-path check and acquiring this lock. Encoding with
+                // the old palette would corrupt replay on the client.
+                if (activeBaselineStreams.get() > 0) {
+                    return false;
+                }
+
+                long seqId = globalSeqId.incrementAndGet();
+                List<Map.Entry<Integer, String>> newPaletteEntries = new ArrayList<>();
+                List<BlockDataEncoder.DeltaEntry> deltaEntries = new ArrayList<>(changes.size());
+
+                BlockPos min = selection.getMin();
                 for (BlockDataEncoder.BlockChangeEntry c : changes) {
                     int rx = c.pos().getX() - min.getX();
                     int ry = c.pos().getY() - min.getY();
@@ -590,19 +778,27 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 if (!newPaletteEntries.isEmpty()) {
                     int oldRev = paletteRevision;
                     paletteRevision++;
-                    byte[] palPkt = BlockDataEncoder.encodePaletteUpdate(epoch, seqId, oldRev, paletteRevision, newPaletteEntries);
+                    palPkt = BlockDataEncoder.encodePaletteUpdate(epoch, seqId, oldRev, paletteRevision, newPaletteEntries);
+                }
+                deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
+
+                // Send while still holding paletteLock so a concurrently starting
+                // baseline can neither capture its snapshot barrier before this batch
+                // nor reset the palette between encoding and transmission. WebSocket
+                // send() only enqueues the frame, so the lock is held briefly.
+                if (palPkt != null) {
                     for (WebSocket client : List.copyOf(clients)) {
                         sendSafe(client, palPkt);
                     }
                 }
+                for (WebSocket client : List.copyOf(clients)) {
+                    sendSafe(client, deltaPkt);
+                }
             }
-
-            byte[] deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
-            for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, deltaPkt);
-            }
+            return true;
         } catch (Exception e) {
             Yefira.LOGGER.error("Error broadcasting delta update", e);
+            return false;
         }
     }
 
@@ -614,19 +810,45 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             }
             pendingDeltaSelection = selection;
             pendingDeltaChanges.put(change.pos().immutable(), change);
+            if (pendingDeltaChanges.size() > MAX_PENDING_DELTA_CHANGES) {
+                // Extremely long baseline + heavy building: fall back to a fresh
+                // full snapshot instead of silently dropping block edits.
+                pendingDeltaOverflow = true;
+                pendingDeltaChanges.clear();
+            }
         }
     }
 
     public void flushQueuedDeltaUpdates() {
         try {
+            // While a baseline is being scanned/streamed, defer deltas: their palette
+            // must match the snapshot palette that the client will install on BEGIN.
+            if (activeBaselineStreams.get() > 0) {
+                return;
+            }
             synchronized (pendingDeltaChanges) {
+                if (pendingDeltaOverflow) {
+                    pendingDeltaOverflow = false;
+                    pendingDeltaChanges.clear();
+                    pendingDeltaSelection = null;
+                    SelectionManager sm = SelectionManager.getInstance();
+                    if (sm.hasSelection() && sm.getCurrentLevel() != null) {
+                        Yefira.LOGGER.warn("Deferred delta queue overflowed; resending a full baseline");
+                        broadcastBaseline(sm.getCurrentLevel(), sm.getCurrentSelection());
+                    }
+                    return;
+                }
                 if (pendingDeltaChanges.isEmpty() || pendingDeltaSelection == null) return;
                 SelectionBox selection = pendingDeltaSelection;
                 List<BlockDataEncoder.BlockChangeEntry> changes = List.copyOf(pendingDeltaChanges.values());
+
+                if (!broadcastDeltaUpdate(selection, changes)) {
+                    // A baseline started concurrently; keep the queued changes and
+                    // retry once its palette is installed.
+                    return;
+                }
                 pendingDeltaChanges.clear();
                 pendingDeltaSelection = null;
-
-                broadcastDeltaUpdate(selection, changes);
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Error flushing queued delta updates", e);
@@ -637,6 +859,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         synchronized (pendingDeltaChanges) {
             pendingDeltaChanges.clear();
             pendingDeltaSelection = null;
+            pendingDeltaOverflow = false;
         }
     }
 

@@ -36,6 +36,13 @@ public class BlockDataEncoder {
     public static final byte OPCODE_RESYNC_REQUEST = 0x0D;
     public static final byte OPCODE_PING = 0x0E;
     public static final byte OPCODE_PONG = 0x0F;
+    public static final byte OPCODE_ERROR = 0x10;
+
+    /** RFC v3.1 hard selection volume limit (voxels). */
+    public static final long MAX_SELECTION_VOLUME = 33_554_432L;
+
+    /** RFC v3.1 diagnostic error code: ResourceLimitExceeded. */
+    public static final short ERROR_RESOURCE_LIMIT_EXCEEDED = 0x0005;
 
     // RFC v3.1 SyncDecision Constants (RFC Section 4.2)
     public static final byte DECISION_VERIFIED_SKIP_REBUILD = 0x00;
@@ -333,6 +340,21 @@ public class BlockDataEncoder {
                 writeShortLE(out, entry.getKey());
                 writeString(out, entry.getValue());
             }
+            out.flush();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return baos.toByteArray();
+    }
+
+    public static byte[] encodeError(long epoch, short errorCode, String message) {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try {
+            DataOutputStream out = new DataOutputStream(baos);
+            writeHeader(out, OPCODE_ERROR);
+            writeLongLE(out, epoch);
+            writeShortLE(out, errorCode);
+            writeString(out, message);
             out.flush();
         } catch (IOException e) {
             e.printStackTrace();
