@@ -116,13 +116,9 @@ public class SelectionCommand {
                 .executes(SelectionCommand::showConfigMaxSide)
                 .then(Commands.argument("side", IntegerArgumentType.integer(1))
                     .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side")))))
-
-            // 5. Utility commands
-            .then(Commands.literal("dump_directional_models")
-                .requires(SelectionCommand::hasAdminPermission)
-                .executes(SelectionCommand::dumpDirectionalModels))
         );
     }
+
 
     private static void checkAndWarnOversized(CommandSourceStack source, SelectionBox box) {
         if (box != null && box.isOversized()) {
@@ -202,7 +198,7 @@ public class SelectionCommand {
         CommandSourceStack source = ctx.getSource();
         SelectionManager mgr = SelectionManager.getInstance();
         if (mgr.hasSelection() && mgr.getCurrentLevel() != null) {
-            WebSocketServerManager.getInstance().broadcastSnapshot(mgr.getCurrentLevel(), mgr.getCurrentSelection());
+            WebSocketServerManager.getInstance().broadcastBaseline(mgr.getCurrentLevel(), mgr.getCurrentSelection());
             source.sendSuccess(() -> Component.translatable("yefira.command.refresh.success"), true);
         } else {
             source.sendFailure(Component.translatable("yefira.command.refresh.no_selection"));
@@ -395,25 +391,5 @@ public class SelectionCommand {
         source.sendSuccess(() -> Component.translatable("yefira.command.config.max_side.set", String.valueOf(maxSide)), true);
         return 1;
     }
-
-    private static int dumpDirectionalModels(CommandContext<CommandSourceStack> ctx) {
-        CommandSourceStack source = ctx.getSource();
-        java.util.Map<String, com.mozi1924.yefira.encoder.BlockStateModelData> models = com.mozi1924.yefira.encoder.BlockModelExtractor.getAllDirectionalModels();
-        StringBuilder sb = new StringBuilder("{\n");
-        int count = 0;
-        for (java.util.Map.Entry<String, com.mozi1924.yefira.encoder.BlockStateModelData> entry : models.entrySet()) {
-            if (count > 0) sb.append(",\n");
-            sb.append("  \"").append(entry.getKey().replace("\"", "\\\"")).append("\": ").append(entry.getValue().toJson());
-            count++;
-        }
-        sb.append("\n}");
-        try {
-            java.nio.file.Path outPath = java.nio.file.Paths.get("directional_models_dump.json");
-            java.nio.file.Files.writeString(outPath, sb.toString());
-            source.sendSuccess(() -> Component.translatable("yefira.command.dump.success", models.size(), outPath.toAbsolutePath().toString()), true);
-        } catch (Exception e) {
-            source.sendFailure(Component.translatable("yefira.command.dump.failed", e.getMessage()));
-        }
-        return count;
-    }
 }
+

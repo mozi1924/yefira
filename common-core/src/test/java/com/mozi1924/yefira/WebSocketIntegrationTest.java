@@ -101,7 +101,7 @@ public class WebSocketIntegrationTest {
         // Test safe send while client is alive
         boolean sent = server.sendSafe(client, "TEST_SAFE_SEND");
         // Note: client is WebSocketClient not server's WebSocket, test server's safe broadcast/send directly:
-        server.broadcastManifest(null, null); // should safely no-op without crash
+        server.broadcastBaseline(null, null); // should safely no-op without crash
 
         // Abrupt close
         client.close();

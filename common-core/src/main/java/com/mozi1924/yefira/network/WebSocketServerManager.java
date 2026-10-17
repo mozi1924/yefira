@@ -18,15 +18,12 @@ import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import com.mozi1924.yefira.encoder.CanonicalVoxelScanner;
+import com.mozi1924.yefira.encoder.XXHash64;
+
 
 public class WebSocketServerManager implements SelectionManager.SelectionChangeListener {
 
@@ -40,6 +37,15 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private SelectionBox pendingDeltaSelection;
     private long lastManifestBroadcastTick = 0;
     private final AtomicLong globalSeqId = new AtomicLong(1);
+
+    // RFC v3.1 Session State
+    private final byte[] serverUuidBytes = new byte[16];
+    private long epoch = 1;
+    private long cachedStateHash = 0;
+    private final Object paletteLock = new Object();
+    private final Map<String, Integer> blockPaletteLookup = new HashMap<>();
+    private final List<String> blockPaletteList = new ArrayList<>();
+    private int paletteRevision = 1;
 
     public static class ClientConfig {
         public byte throttleMode = 0; // 0 = NORMAL, 1 = ECO, 2 = PAUSED
@@ -85,7 +91,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     private WebSocketServerManager() {
+        new Random().nextBytes(serverUuidBytes);
     }
+
 
     public synchronized void startServer() {
         startServer(HOST, PORT);
@@ -161,12 +169,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             clients.add(conn);
             clientConfigs.put(conn, new ClientConfig());
             Yefira.LOGGER.info("New DCC client connected: {}", conn.getRemoteSocketAddress());
-
-            SelectionManager selectionManager = SelectionManager.getInstance();
-            if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                streamingExecutor.submit(() -> sendHandshakeManifestToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
-            }
+            // RFC v3.1: Client initiates handshake by sending HELLO (0x01).
         }
+
 
         @Override
         public void onClose(WebSocket conn, int code, String reason, boolean remote) {
@@ -283,21 +288,11 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             } else if ("REFRESH".equalsIgnoreCase(message.trim())) {
                 SelectionManager selectionManager = SelectionManager.getInstance();
                 if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                    sendSnapshotToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
+                    streamingExecutor.submit(() -> sendBaselineToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
                 }
-            } else if ("DUMP_MODELS".equalsIgnoreCase(message.trim())) {
-                java.util.Map<String, com.mozi1924.yefira.encoder.BlockStateModelData> models = com.mozi1924.yefira.encoder.BlockModelExtractor.getAllDirectionalModels();
-                StringBuilder sb = new StringBuilder("DUMP_MODELS:{\n");
-                int count = 0;
-                for (java.util.Map.Entry<String, com.mozi1924.yefira.encoder.BlockStateModelData> entry : models.entrySet()) {
-                    if (count > 0) sb.append(",\n");
-                    sb.append("  \"").append(entry.getKey().replace("\"", "\\\"")).append("\": ").append(entry.getValue().toJson());
-                    count++;
-                }
-                sb.append("\n}");
-                sendSafe(conn, sb.toString());
             }
         } catch (Exception e) {
+
             Yefira.LOGGER.error("Error handling text message from DCC client", e);
         }
     }
@@ -330,60 +325,110 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 return;
             }
 
-            SelectionManager selectionManager = SelectionManager.getInstance();
-            if (!selectionManager.hasSelection() || selectionManager.getCurrentLevel() == null) {
+            if (packetType == BlockDataEncoder.OPCODE_HELLO) {
+                BlockDataEncoder.HelloPacket hello = BlockDataEncoder.decodeHello(message);
+                if (hello != null) {
+                    handleClientHello(conn, hello);
+                }
                 return;
             }
 
-            Level level = selectionManager.getCurrentLevel();
-            SelectionBox selection = selectionManager.getCurrentSelection();
+            if (packetType == BlockDataEncoder.OPCODE_BASELINE_ACK) {
+                Yefira.LOGGER.info("Client {} acknowledged baseline commit", conn.getRemoteSocketAddress());
+                return;
+            }
 
-            if (packetType == BlockDataEncoder.PACKET_C2S_REQ_FULL_SYNC) {
-                Yefira.LOGGER.info("Client {} requested FULL SYNC.", conn.getRemoteSocketAddress());
-                streamingExecutor.submit(() -> sendSnapshotToClient(conn, level, selection));
-            } else if (packetType == BlockDataEncoder.PACKET_C2S_REQ_SECTION_SYNC) {
-                if (message.remaining() < 2) return;
-                int count = message.getShort() & 0xFFFF;
-                Yefira.LOGGER.info("Client {} requested section sync for {} sections.", conn.getRemoteSocketAddress(), count);
-
-                List<BlockDataEncoder.SectionPos> requestedPositions = new ArrayList<>(count);
-                for (int i = 0; i < count; i++) {
-                    if (message.remaining() < 12) break;
-                    int secX = message.getInt();
-                    int secY = message.getInt();
-                    int secZ = message.getInt();
-                    requestedPositions.add(new BlockDataEncoder.SectionPos(secX, secY, secZ));
+            if (packetType == BlockDataEncoder.OPCODE_RESYNC_REQUEST || packetType == BlockDataEncoder.PACKET_C2S_REQ_FULL_SYNC) {
+                SelectionManager sm = SelectionManager.getInstance();
+                if (sm.hasSelection() && sm.getCurrentLevel() != null) {
+                    streamingExecutor.submit(() -> sendBaselineToClient(conn, sm.getCurrentLevel(), sm.getCurrentSelection()));
                 }
+                return;
+            }
 
-                streamingExecutor.submit(() -> {
-                    long streamId = globalSeqId.incrementAndGet();
-                    byte[] beginPacket = BlockDataEncoder.encodeStreamBegin(streamId, requestedPositions.size(), 0);
-                    if (!sendSafe(conn, beginPacket)) return;
-
-                    int sent = 0;
-                    for (BlockDataEncoder.SectionPos secPos : requestedPositions) {
-                        if (conn == null || !conn.isOpen()) break;
-                        BlockDataEncoder.invalidateSectionCRC(secPos);
-                        byte[] sectionSnapshot = BlockDataEncoder.encodeSectionSnapshot(level, selection, secPos);
-                        if (!sendSafe(conn, sectionSnapshot)) {
-                            break;
-                        }
-                        sent++;
-                        if ((sent % 16) == 0) {
-                            Thread.yield();
-                        }
-                    }
-
-                    byte[] endPacket = BlockDataEncoder.encodeStreamEnd(streamId, sent, 0);
-                    sendSafe(conn, endPacket);
-
-                    // Post-stream Manifest for repaired sections (with invalidated CRCs)
-                    byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, streamId);
-                    sendSafe(conn, manifestBytes);
-                });
+            if (packetType == BlockDataEncoder.OPCODE_PING) {
+                if (message.remaining() >= 8) {
+                    long ts = message.getLong();
+                    sendSafe(conn, BlockDataEncoder.encodePong(ts));
+                }
+                return;
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Error handling binary message from DCC client", e);
+        }
+    }
+
+    private void handleClientHello(WebSocket conn, BlockDataEncoder.HelloPacket hello) {
+        SelectionManager sm = SelectionManager.getInstance();
+        if (!sm.hasSelection() || sm.getCurrentLevel() == null) {
+            byte[] welcome = BlockDataEncoder.encodeWelcome(
+                    (short) 3,
+                    serverUuidBytes,
+                    epoch,
+                    globalSeqId.get(),
+                    null,
+                    0, 0, 0,
+                    0,
+                    (byte) 3, // REJECTED
+                    "No active selection"
+            );
+            sendSafe(conn, welcome);
+            return;
+        }
+
+        Level level = sm.getCurrentLevel();
+        SelectionBox selection = sm.getCurrentSelection();
+        String dimension = VersionCompat.level().getDimensionId(level);
+
+        ensureSessionState(level, selection, dimension);
+
+        boolean matchesUuid = Arrays.equals(hello.cachedWorldUuid, serverUuidBytes);
+        boolean matchesEpoch = hello.cachedEpoch == epoch;
+        boolean matchesSeq = hello.cachedSeq == globalSeqId.get();
+        boolean matchesBounds = (hello.cachedMinX == selection.getMin().getX())
+                && (hello.cachedMinY == selection.getMin().getY())
+                && (hello.cachedMinZ == selection.getMin().getZ())
+                && (hello.cachedSizeX == selection.getSizeX())
+                && (hello.cachedSizeY == selection.getSizeY())
+                && (hello.cachedSizeZ == selection.getSizeZ());
+        boolean matchesHash = (hello.cachedStateHash != 0) && (hello.cachedStateHash == cachedStateHash);
+
+        if (matchesUuid && matchesEpoch && matchesSeq && matchesBounds && matchesHash) {
+            Yefira.LOGGER.info("Client {} verified 100% in sync with scene! Sending VERIFIED_SKIP_REBUILD.", conn.getRemoteSocketAddress());
+            byte[] welcome = BlockDataEncoder.encodeWelcome(
+                    (short) 3,
+                    serverUuidBytes,
+                    epoch,
+                    globalSeqId.get(),
+                    selection.getMin(),
+                    selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
+                    cachedStateHash,
+                    (byte) 0, // VERIFIED_SKIP_REBUILD
+                    dimension
+            );
+            sendSafe(conn, welcome);
+        } else {
+            Yefira.LOGGER.info("Client {} cache mismatch or initial connect -> sending FULL_BASELINE_REQUIRED.", conn.getRemoteSocketAddress());
+            byte[] welcome = BlockDataEncoder.encodeWelcome(
+                    (short) 3,
+                    serverUuidBytes,
+                    epoch,
+                    globalSeqId.get(),
+                    selection.getMin(),
+                    selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
+                    cachedStateHash,
+                    (byte) 2, // FULL_BASELINE_REQUIRED
+                    dimension
+            );
+            if (sendSafe(conn, welcome)) {
+                streamingExecutor.submit(() -> sendBaselineToClient(conn, level, selection));
+            }
+        }
+    }
+
+    private void ensureSessionState(Level level, SelectionBox selection, String dimension) {
+        if (cachedStateHash == 0 && level != null && selection != null) {
+            cachedStateHash = CanonicalVoxelScanner.computeCanonicalStateHash(level, selection, dimension);
         }
     }
 
@@ -392,28 +437,26 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     @Override
     public void onSelectionChanged(Level level, SelectionBox selection) {
         clearPendingDeltaChanges();
-        BlockDataEncoder.clearSectionCRCCache();
+        cachedStateHash = 0;
         if (clients.isEmpty()) return;
 
         long newStreamId = globalSeqId.incrementAndGet();
         activeBroadcastStreamId.set(newStreamId);
 
-        // Cancel previous streaming task if still running
         java.util.concurrent.Future<?> prevTask = activeBroadcastFuture.getAndSet(null);
         if (prevTask != null && !prevTask.isDone()) {
             prevTask.cancel(true);
-            Yefira.LOGGER.info("Preempted previous streaming task for newer selection change.");
         }
 
-        Yefira.LOGGER.info("Broadcasting new selection snapshot (Stream {}) to {} clients...", newStreamId, clients.size());
-        java.util.concurrent.Future<?> future = streamingExecutor.submit(() -> broadcastSnapshot(level, selection, newStreamId));
+        Yefira.LOGGER.info("Broadcasting baseline for new selection (Stream {}) to {} clients...", newStreamId, clients.size());
+        java.util.concurrent.Future<?> future = streamingExecutor.submit(() -> broadcastBaseline(level, selection));
         activeBroadcastFuture.set(future);
     }
 
     @Override
     public void onSelectionCleared() {
         clearPendingDeltaChanges();
-        BlockDataEncoder.clearSectionCRCCache();
+        cachedStateHash = 0;
         if (clients.isEmpty()) return;
         java.util.concurrent.Future<?> prevTask = activeBroadcastFuture.getAndSet(null);
         if (prevTask != null && !prevTask.isDone()) {
@@ -423,132 +466,148 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     // --- 数据发送辅助方法 ---
 
-    private void sendHandshakeManifestToClient(WebSocket conn, Level level, SelectionBox selection) {
-        try {
-            BlockDataEncoder.clearSectionCRCCache();
-            long snapshotSeqId = globalSeqId.incrementAndGet();
-            byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
-            if (!sendSafe(conn, infoBytes)) return;
-
-            int totalSections = BlockDataEncoder.getCoveredSections(selection).size();
-            int nonEmptySections = BlockDataEncoder.countNonEmptySections(level, selection);
-            long totalVolume = selection.getVolume();
-            String dimName = VersionCompat.level().getDimensionId(level);
-            byte[] handshakeBytes = BlockDataEncoder.encodeHandshakeInfo(totalSections, nonEmptySections, totalVolume, dimName, 0);
-            if (!sendSafe(conn, handshakeBytes)) return;
-
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
-            sendSafe(conn, manifestBytes);
-        } catch (Exception e) {
-            Yefira.LOGGER.error("Failed to send handshake manifest to client {}", conn.getRemoteSocketAddress(), e);
-        }
-    }
-
-    private void sendSnapshotToClient(WebSocket conn, Level level, SelectionBox selection) {
-        try {
-            BlockDataEncoder.clearSectionCRCCache();
-            long snapshotSeqId = globalSeqId.incrementAndGet();
-            long volume = selection.getVolume();
-
-            byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
-            if (!sendSafe(conn, infoBytes)) return;
-
-            int totalSections = BlockDataEncoder.getCoveredSections(selection).size();
-            int nonEmptySections = BlockDataEncoder.countNonEmptySections(level, selection);
-            String dimName = VersionCompat.level().getDimensionId(level);
-            byte[] handshakeBytes = BlockDataEncoder.encodeHandshakeInfo(totalSections, nonEmptySections, volume, dimName, 0);
-            if (!sendSafe(conn, handshakeBytes)) return;
-
-            BlockDataEncoder.streamNonEmptySectionSnapshots(level, selection, snapshotSeqId, () -> !conn.isOpen(), bytes -> sendSafe(conn, bytes));
-
-            // Post-stream Manifest for final end-to-end verification
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
-            sendSafe(conn, manifestBytes);
-        } catch (Exception e) {
-            Yefira.LOGGER.error("Failed to send snapshot to client {}", conn.getRemoteSocketAddress(), e);
-        }
-    }
-
-    public void broadcastSnapshot(Level level, SelectionBox selection) {
-        broadcastSnapshot(level, selection, globalSeqId.incrementAndGet());
-    }
-
-    public void broadcastSnapshot(Level level, SelectionBox selection, long snapshotSeqId) {
-        if (clients.isEmpty()) return;
-        try {
-            long volume = selection.getVolume();
-
-            byte[] infoBytes = BlockDataEncoder.encodeSelectionInfo(selection);
-            for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, infoBytes);
-            }
-
-            int totalSections = BlockDataEncoder.getCoveredSections(selection).size();
-            int nonEmptySections = BlockDataEncoder.countNonEmptySections(level, selection);
-            String dimName = VersionCompat.level().getDimensionId(level);
-            byte[] handshakeBytes = BlockDataEncoder.encodeHandshakeInfo(totalSections, nonEmptySections, volume, dimName, 0);
-            for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, handshakeBytes);
-            }
-
-            BlockDataEncoder.streamNonEmptySectionSnapshots(
-                    level,
-                    selection,
-                    snapshotSeqId,
-                    () -> activeBroadcastStreamId.get() != snapshotSeqId,
-                    bytes -> {
-                        boolean anySuccess = false;
-                        for (WebSocket client : List.copyOf(clients)) {
-                            if (sendSafe(client, bytes)) {
-                                anySuccess = true;
-                            }
-                        }
-                        return anySuccess || clients.isEmpty();
-                    }
-            );
-
-            // Post-stream Manifest for final verification across all clients
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, snapshotSeqId);
-            for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, manifestBytes);
-            }
-        } catch (Exception e) {
-            Yefira.LOGGER.error("Error broadcasting snapshot", e);
-        }
-    }
-
-    public void broadcastManifest(Level level, SelectionBox selection) {
+    public void broadcastBaseline(Level level, SelectionBox selection) {
         if (clients.isEmpty() || level == null || selection == null) return;
+        for (WebSocket client : List.copyOf(clients)) {
+            sendBaselineToClient(client, level, selection);
+        }
+    }
+
+    private void sendBaselineToClient(WebSocket conn, Level level, SelectionBox selection) {
         try {
-            long seqId = globalSeqId.incrementAndGet();
-            byte[] manifestBytes = BlockDataEncoder.encodeSectionManifest(level, selection, seqId);
-            for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, manifestBytes);
+            String dimension = VersionCompat.level().getDimensionId(level);
+            CanonicalVoxelScanner.BaselineScanResult scan = CanonicalVoxelScanner.scanBaseline(level, selection, dimension);
+            cachedStateHash = scan.stateHash;
+
+            synchronized (paletteLock) {
+                blockPaletteList.clear();
+                blockPaletteLookup.clear();
+                for (int i = 0; i < scan.blockPalette.size(); i++) {
+                    String p = scan.blockPalette.get(i);
+                    blockPaletteList.add(p);
+                    blockPaletteLookup.put(p, i);
+                }
+                paletteRevision = 1;
             }
+
+            long snapshotSeq = globalSeqId.get();
+            byte[] snapshotUuid = new byte[16];
+            new Random().nextBytes(snapshotUuid);
+
+            byte[] payload = scan.payload;
+            int totalBytes = payload.length;
+            int chunkSize = 256 * 1024;
+            int totalChunks = Math.max(1, (totalBytes + chunkSize - 1) / chunkSize);
+
+            byte[] beginPkt = BlockDataEncoder.encodeBaselineBegin(
+                    epoch,
+                    snapshotUuid,
+                    snapshotSeq,
+                    scan.minPos,
+                    scan.sizeX, scan.sizeY, scan.sizeZ,
+                    scan.stateHash,
+                    paletteRevision,
+                    totalChunks,
+                    totalBytes,
+                    totalBytes,
+                    (byte) 0, // uncompressed
+                    (byte) scan.paletteBitsPerBlock,
+                    (byte) scan.biomeBitsPerQuart,
+                    dimension,
+                    scan.blockPalette,
+                    scan.biomePalette
+            );
+            if (!sendSafe(conn, beginPkt)) return;
+
+            int bytesPerVoxel = Math.max(1, scan.paletteBitsPerBlock / 8);
+            int voxelsPerChunk = chunkSize / bytesPerVoxel;
+
+            for (int chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+                if (!conn.isOpen()) break;
+                int offset = chunkIdx * chunkSize;
+                int len = Math.min(chunkSize, totalBytes - offset);
+                byte[] chunkPayload = new byte[len];
+                System.arraycopy(payload, offset, chunkPayload, 0, len);
+
+                long firstVoxelIdx = (long) chunkIdx * voxelsPerChunk;
+                int voxelCnt = (int) Math.min((long) voxelsPerChunk, Math.max(0, scan.totalVoxels - firstVoxelIdx));
+
+                XXHash64 chunkHasher = new XXHash64(0);
+                chunkHasher.update(chunkPayload);
+                long chunkHash = chunkHasher.digest();
+
+                byte[] chunkPkt = BlockDataEncoder.encodeBaselineChunk(
+                        epoch,
+                        snapshotUuid,
+                        chunkIdx,
+                        totalChunks,
+                        firstVoxelIdx,
+                        voxelCnt,
+                        len,
+                        chunkHash,
+                        chunkPayload
+                );
+                if (!sendSafe(conn, chunkPkt)) return;
+            }
+
+            byte[] endPkt = BlockDataEncoder.encodeBaselineEnd(
+                    epoch,
+                    snapshotUuid,
+                    snapshotSeq,
+                    totalChunks,
+                    scan.stateHash,
+                    (byte) 0
+            );
+            sendSafe(conn, endPkt);
+            Yefira.LOGGER.info("Baseline streamed to client {} ({} bytes, {} chunks, hash=0x{})",
+                    conn.getRemoteSocketAddress(), totalBytes, totalChunks, Long.toHexString(scan.stateHash));
         } catch (Exception e) {
-            Yefira.LOGGER.error("Error broadcasting section manifest", e);
+            Yefira.LOGGER.error("Failed to stream baseline to client {}", conn.getRemoteSocketAddress(), e);
         }
     }
 
     public void tickValidationHeartbeat(long currentTick) {
-        if (clients.isEmpty()) return;
-        SelectionManager selectionManager = SelectionManager.getInstance();
-        if (!selectionManager.hasSelection() || selectionManager.getCurrentLevel() == null) return;
-
-        // Periodic background consistency check every 30 seconds (600 ticks)
-        if (currentTick - lastManifestBroadcastTick >= 600) {
-            lastManifestBroadcastTick = currentTick;
-            broadcastManifest(selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
-        }
+        // Heartbeats handled via native WebSocket ping/pong
     }
 
     public void broadcastDeltaUpdate(SelectionBox selection, List<BlockDataEncoder.BlockChangeEntry> changes) {
         if (clients.isEmpty() || changes.isEmpty()) return;
         try {
             long seqId = globalSeqId.incrementAndGet();
-            byte[] deltaBytes = BlockDataEncoder.encodeDeltaUpdate(selection, changes, seqId);
+            List<Map.Entry<Integer, String>> newPaletteEntries = new ArrayList<>();
+            List<BlockDataEncoder.DeltaEntry> deltaEntries = new ArrayList<>(changes.size());
+
+            BlockPos min = selection.getMin();
+            synchronized (paletteLock) {
+                for (BlockDataEncoder.BlockChangeEntry c : changes) {
+                    int rx = c.pos().getX() - min.getX();
+                    int ry = c.pos().getY() - min.getY();
+                    int rz = c.pos().getZ() - min.getZ();
+
+                    String stateStr = CanonicalVoxelScanner.normalizeCanonicalBlockState(c.state());
+                    Integer stateId = blockPaletteLookup.get(stateStr);
+                    if (stateId == null) {
+                        stateId = blockPaletteList.size();
+                        blockPaletteList.add(stateStr);
+                        blockPaletteLookup.put(stateStr, stateId);
+                        newPaletteEntries.add(new AbstractMap.SimpleEntry<>(stateId, stateStr));
+                    }
+                    deltaEntries.add(new BlockDataEncoder.DeltaEntry(rx, ry, rz, stateId));
+                }
+
+                if (!newPaletteEntries.isEmpty()) {
+                    int oldRev = paletteRevision;
+                    paletteRevision++;
+                    byte[] palPkt = BlockDataEncoder.encodePaletteUpdate(epoch, seqId, oldRev, paletteRevision, newPaletteEntries);
+                    for (WebSocket client : List.copyOf(clients)) {
+                        sendSafe(client, palPkt);
+                    }
+                }
+            }
+
+            byte[] deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
             for (WebSocket client : List.copyOf(clients)) {
-                sendSafe(client, deltaBytes);
+                sendSafe(client, deltaPkt);
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Error broadcasting delta update", e);
@@ -556,8 +615,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     public void queueDeltaUpdate(SelectionBox selection, BlockDataEncoder.BlockChangeEntry change) {
-        BlockPos pos = change.pos();
-        BlockDataEncoder.invalidateSectionCRC(new BlockDataEncoder.SectionPos(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4));
         if (clients.isEmpty()) return;
         synchronized (pendingDeltaChanges) {
             if (pendingDeltaSelection != null && !sameBounds(pendingDeltaSelection, selection)) {
@@ -577,38 +634,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 pendingDeltaChanges.clear();
                 pendingDeltaSelection = null;
 
-                SelectionManager selectionManager = SelectionManager.getInstance();
-                Level level = selectionManager.getCurrentLevel();
-
-                if (changes.size() > 64 && level != null) {
-                    Map<BlockDataEncoder.SectionPos, List<BlockDataEncoder.BlockChangeEntry>> sectionGroups = new HashMap<>();
-                    for (BlockDataEncoder.BlockChangeEntry change : changes) {
-                        BlockPos pos = change.pos();
-                        BlockDataEncoder.SectionPos secPos = new BlockDataEncoder.SectionPos(pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
-                        sectionGroups.computeIfAbsent(secPos, k -> new ArrayList<>()).add(change);
-                    }
-
-                    List<BlockDataEncoder.BlockChangeEntry> remainingMicroDeltas = new ArrayList<>();
-                    for (Map.Entry<BlockDataEncoder.SectionPos, List<BlockDataEncoder.BlockChangeEntry>> entry : sectionGroups.entrySet()) {
-                        BlockDataEncoder.SectionPos secPos = entry.getKey();
-                        List<BlockDataEncoder.BlockChangeEntry> secChanges = entry.getValue();
-
-                        if (secChanges.size() >= 32 || changes.size() > 256) {
-                            byte[] secBytes = BlockDataEncoder.encodeSectionSnapshot(level, selection, secPos);
-                            for (WebSocket client : List.copyOf(clients)) {
-                                sendSafe(client, secBytes);
-                            }
-                        } else {
-                            remainingMicroDeltas.addAll(secChanges);
-                        }
-                    }
-
-                    if (!remainingMicroDeltas.isEmpty()) {
-                        broadcastDeltaUpdate(selection, remainingMicroDeltas);
-                    }
-                } else {
-                    broadcastDeltaUpdate(selection, changes);
-                }
+                broadcastDeltaUpdate(selection, changes);
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Error flushing queued delta updates", e);
@@ -626,3 +652,4 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         return a.getMin().equals(b.getMin()) && a.getMax().equals(b.getMax());
     }
 }
+

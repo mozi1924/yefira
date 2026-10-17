@@ -5,9 +5,7 @@ import com.mozi1924.yefira.Yefira;
 import com.mozi1924.yefira.client.compat.KeyMappingCompat;
 import com.mozi1924.yefira.client.ghost.GhostModeManager;
 import com.mozi1924.yefira.client.gui.YefiraScreen;
-import com.mozi1924.yefira.client.model.ClientBlockModelProvider;
 import com.mozi1924.yefira.config.YefiraConfig;
-import com.mozi1924.yefira.encoder.BlockModelExtractor;
 import com.mozi1924.yefira.network.WebSocketServerManager;
 import com.mozi1924.yefira.selection.SelectionManager;
 import com.mozi1924.yefira.selection.SelectionStorageManager;
@@ -29,9 +27,8 @@ public class YefiraClient {
     public static KeyMapping keyPresetBox;
 
     public static void init() {
-        // Register Client Block Model Provider
-        BlockModelExtractor.setProvider(new ClientBlockModelProvider());
     }
+
 
     public static void createKeyMappings() {
         keyGhostMode = KeyMappingCompat.createKeyMapping(
