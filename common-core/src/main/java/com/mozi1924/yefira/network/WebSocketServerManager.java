@@ -164,7 +164,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
             SelectionManager selectionManager = SelectionManager.getInstance();
             if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                streamingExecutor.submit(() -> sendSnapshotToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
+                streamingExecutor.submit(() -> sendHandshakeManifestToClient(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection()));
             }
         }
 
