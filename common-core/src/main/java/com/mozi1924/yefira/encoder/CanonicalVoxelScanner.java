@@ -5,6 +5,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -60,20 +62,46 @@ public class CanonicalVoxelScanner {
         }
     }
 
-    /**
-     * Normalizes a block state string representation for hashing according to RFC Section 3.1.
-     */
-    public static String normalizeCanonicalBlockState(BlockState state) {
+    public static class CanonicalBlock {
+        public final String string;
+        public final byte[] utf8Bytes;
+
+        public CanonicalBlock(String string, byte[] utf8Bytes) {
+            this.string = string;
+            this.utf8Bytes = utf8Bytes;
+        }
+    }
+
+    private static final byte[] AIR_UTF8 = "minecraft:air".getBytes(StandardCharsets.UTF_8);
+    private static final CanonicalBlock CANONICAL_AIR = new CanonicalBlock("minecraft:air", AIR_UTF8);
+    private static final Map<BlockState, CanonicalBlock> CANONICAL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static CanonicalBlock getCanonicalBlock(BlockState state) {
         if (state == null || state.isAir()) {
-            return "minecraft:air";
+            return CANONICAL_AIR;
         }
         if (state.is(Blocks.BUBBLE_COLUMN)
                 || state.is(Blocks.STRUCTURE_VOID)
                 || state.is(Blocks.CAVE_AIR)
                 || state.is(Blocks.VOID_AIR)) {
-            return "minecraft:air";
+            return CANONICAL_AIR;
         }
-        return BlockDataEncoder.serializeBlockState(state);
+        CanonicalBlock cached = CANONICAL_CACHE.get(state);
+        if (cached != null) {
+            return cached;
+        }
+        String serialized = BlockDataEncoder.serializeBlockState(state);
+        byte[] bytes = serialized.getBytes(StandardCharsets.UTF_8);
+        cached = new CanonicalBlock(serialized, bytes);
+        CANONICAL_CACHE.put(state, cached);
+        return cached;
+    }
+
+    /**
+     * Normalizes a block state string representation for hashing according to RFC Section 3.1.
+     */
+    public static String normalizeCanonicalBlockState(BlockState state) {
+        return getCanonicalBlock(state).string;
     }
 
     /**
@@ -84,72 +112,13 @@ public class CanonicalVoxelScanner {
      * - Y is slowest-varying axis (bottom-up scanning of horizontal slices)
      */
     public static long computeCanonicalStateHash(Level level, SelectionBox box, String dimension) {
-        XXHash64 hasher = new XXHash64(0);
-
-        BlockPos min = box.getMin();
-        int minX = min.getX();
-        int minY = min.getY();
-        int minZ = min.getZ();
-        int sizeX = box.getSizeX();
-        int sizeY = box.getSizeY();
-        int sizeZ = box.getSizeZ();
-
-        // 1. Metadata Header
-        hasher.update((byte) 0x01); // Canonical Encoding Version: u8
-        byte[] dimBytes = dimension.getBytes(StandardCharsets.UTF_8);
-        hasher.updateLE16((short) dimBytes.length);
-        hasher.update(dimBytes);
-        hasher.updateLE32(minX);
-        hasher.updateLE32(minY);
-        hasher.updateLE32(minZ);
-        hasher.updateLE32(sizeX);
-        hasher.updateLE32(sizeY);
-        hasher.updateLE32(sizeZ);
-
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-
-        // 2. Continuous 3D Voxel Stream (Y-slowest, Z-next, X-fastest)
-        int maxX = minX + sizeX;
-        int maxY = minY + sizeY;
-        int maxZ = minZ + sizeZ;
-
-        for (int y = minY; y < maxY; y++) {
-            for (int z = minZ; z < maxZ; z++) {
-                for (int x = minX; x < maxX; x++) {
-                    pos.set(x, y, z);
-                    BlockState state = level.getBlockState(pos);
-                    String stateStr = normalizeCanonicalBlockState(state);
-                    byte[] bytes = stateStr.getBytes(StandardCharsets.UTF_8);
-                    hasher.updateLE16((short) bytes.length);
-                    hasher.update(bytes);
-                }
-            }
-        }
-
-        // 3. Continuous 3D Quart Biome Stream (4x4x4 downsampled grid)
-        int qw = (sizeX + 3) / 4;
-        int qh = (sizeY + 3) / 4;
-        int qd = (sizeZ + 3) / 4;
-
-        for (int qy = 0; qy < qh; qy++) {
-            for (int qz = 0; qz < qd; qz++) {
-                for (int qx = 0; qx < qw; qx++) {
-                    pos.set(minX + (qx * 4), minY + (qy * 4), minZ + (qz * 4));
-                    String biomeStr = BlockDataEncoder.getBiomeId(level, pos);
-                    String trimmed = (biomeStr == null || biomeStr.trim().isEmpty()) ? "minecraft:plains" : biomeStr.trim();
-                    byte[] bytes = trimmed.getBytes(StandardCharsets.UTF_8);
-                    hasher.updateLE16((short) bytes.length);
-                    hasher.update(bytes);
-                }
-            }
-        }
-
-        return hasher.digest();
+        return scanBaseline(level, box, dimension).stateHash;
     }
 
     /**
      * Performs a single continuous scan of the selection volume to extract the palette,
      * indices, and compute the canonical state hash simultaneously.
+     * High-performance chunk-grid accelerated implementation.
      */
     public static BaselineScanResult scanBaseline(Level level, SelectionBox box, String dimension) {
         BlockPos min = box.getMin();
@@ -177,6 +146,8 @@ public class CanonicalVoxelScanner {
 
         List<String> blockPalette = new ArrayList<>();
         Map<String, Integer> blockPaletteLookup = new HashMap<>();
+        Map<BlockState, Integer> stateToPaletteId = new IdentityHashMap<>();
+
         // Air is always entry 0
         blockPalette.add("minecraft:air");
         blockPaletteLookup.put("minecraft:air", 0);
@@ -184,32 +155,84 @@ public class CanonicalVoxelScanner {
         int[] voxelIndices = new int[(int) totalVoxels];
         int vIdx = 0;
 
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         int maxX = minX + sizeX;
         int maxY = minY + sizeY;
         int maxZ = minZ + sizeZ;
 
+        // Pre-fetch chunk grid across selection bounding box
+        int minSecX = minX >> 4;
+        int maxSecX = (maxX - 1) >> 4;
+        int minSecZ = minZ >> 4;
+        int maxSecZ = (maxZ - 1) >> 4;
+        int chunksW = maxSecX - minSecX + 1;
+        int chunksD = maxSecZ - minSecZ + 1;
+
+        LevelChunk[][] chunkGrid = new LevelChunk[chunksW][chunksD];
+        for (int cz = minSecZ; cz <= maxSecZ; cz++) {
+            for (int cx = minSecX; cx <= maxSecX; cx++) {
+                try {
+                    chunkGrid[cx - minSecX][cz - minSecZ] = level.getChunk(cx, cz);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
         // 2. Voxel Scan (Y bottom-up, Z next, X fastest)
         for (int y = minY; y < maxY; y++) {
+            int secY = y >> 4;
+            int sectionIdx = level.getSectionIndexFromSectionY(secY);
+            int ly = y & 15;
+
             for (int z = minZ; z < maxZ; z++) {
-                for (int x = minX; x < maxX; x++) {
-                    pos.set(x, y, z);
-                    BlockState state = level.getBlockState(pos);
-                    String stateStr = normalizeCanonicalBlockState(state);
+                int cz = (z >> 4) - minSecZ;
+                int lz = z & 15;
 
-                    // Hash update
-                    byte[] bytes = stateStr.getBytes(StandardCharsets.UTF_8);
-                    hasher.updateLE16((short) bytes.length);
-                    hasher.update(bytes);
-
-                    // Palette lookup
-                    Integer idx = blockPaletteLookup.get(stateStr);
-                    if (idx == null) {
-                        idx = blockPalette.size();
-                        blockPalette.add(stateStr);
-                        blockPaletteLookup.put(stateStr, idx);
+                int x = minX;
+                while (x < maxX) {
+                    int cx = (x >> 4) - minSecX;
+                    LevelChunk chunk = (cx >= 0 && cx < chunksW && cz >= 0 && cz < chunksD) ? chunkGrid[cx][cz] : null;
+                    LevelChunkSection section = null;
+                    if (chunk != null) {
+                        LevelChunkSection[] sections = chunk.getSections();
+                        if (sectionIdx >= 0 && sectionIdx < sections.length) {
+                            section = sections[sectionIdx];
+                        }
                     }
-                    voxelIndices[vIdx++] = idx;
+
+                    int nextBoundaryX = (x & ~15) + 16;
+                    int nextX = Math.min(maxX, nextBoundaryX);
+                    int span = nextX - x;
+
+                    if (section == null || section.hasOnlyAir()) {
+                        for (int i = 0; i < span; i++) {
+                            hasher.updateLE16((short) CANONICAL_AIR.utf8Bytes.length);
+                            hasher.update(CANONICAL_AIR.utf8Bytes);
+                            voxelIndices[vIdx++] = 0;
+                        }
+                        x = nextX;
+                    } else {
+                        for (; x < nextX; x++) {
+                            BlockState state = section.getBlockState(x & 15, ly, lz);
+                            CanonicalBlock cb = getCanonicalBlock(state);
+
+                            // Hash update directly with precomputed UTF-8 bytes
+                            hasher.updateLE16((short) cb.utf8Bytes.length);
+                            hasher.update(cb.utf8Bytes);
+
+                            // IdentityHashMap lookup by BlockState reference
+                            Integer idx = stateToPaletteId.get(state);
+                            if (idx == null) {
+                                idx = blockPaletteLookup.get(cb.string);
+                                if (idx == null) {
+                                    idx = blockPalette.size();
+                                    blockPalette.add(cb.string);
+                                    blockPaletteLookup.put(cb.string, idx);
+                                }
+                                stateToPaletteId.put(state, idx);
+                            }
+                            voxelIndices[vIdx++] = idx;
+                        }
+                    }
                 }
             }
         }
@@ -222,11 +245,11 @@ public class CanonicalVoxelScanner {
 
         List<String> biomePalette = new ArrayList<>();
         Map<String, Integer> biomePaletteLookup = new HashMap<>();
-        biomePalette.add("minecraft:plains");
-        biomePaletteLookup.put("minecraft:plains", 0);
+        Map<String, byte[]> biomeUtf8Cache = new HashMap<>();
 
         int[] biomeIndices = new int[totalQuarts];
         int bIdx = 0;
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
         for (int qy = 0; qy < qh; qy++) {
             for (int qz = 0; qz < qd; qz++) {
@@ -236,7 +259,7 @@ public class CanonicalVoxelScanner {
                     String trimmed = (biomeStr == null || biomeStr.trim().isEmpty()) ? "minecraft:plains" : biomeStr.trim();
 
                     // Hash update
-                    byte[] bytes = trimmed.getBytes(StandardCharsets.UTF_8);
+                    byte[] bytes = biomeUtf8Cache.computeIfAbsent(trimmed, s -> s.getBytes(StandardCharsets.UTF_8));
                     hasher.updateLE16((short) bytes.length);
                     hasher.update(bytes);
 
@@ -251,6 +274,10 @@ public class CanonicalVoxelScanner {
             }
         }
 
+        if (biomePalette.isEmpty()) {
+            biomePalette.add("minecraft:plains");
+        }
+
         long finalStateHash = hasher.digest();
 
         // 4. Pack payload (LSB packed indices)
@@ -263,21 +290,22 @@ public class CanonicalVoxelScanner {
         int biomeBytesLen = hasMultipleBiomes ? totalQuarts : 0;
 
         byte[] payload = new byte[voxelBytesLen + biomeBytesLen];
-        ByteBuffer buf = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
 
         if (bitsPerBlock == 8) {
             for (int i = 0; i < totalVoxels; i++) {
-                buf.put((byte) (voxelIndices[i] & 0xFF));
+                payload[i] = (byte) voxelIndices[i];
             }
         } else {
+            ByteBuffer buf = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < totalVoxels; i++) {
                 buf.putShort((short) (voxelIndices[i] & 0xFFFF));
             }
         }
 
         if (hasMultipleBiomes) {
+            int offset = voxelBytesLen;
             for (int i = 0; i < totalQuarts; i++) {
-                buf.put((byte) (biomeIndices[i] & 0xFF));
+                payload[offset + i] = (byte) biomeIndices[i];
             }
         }
 

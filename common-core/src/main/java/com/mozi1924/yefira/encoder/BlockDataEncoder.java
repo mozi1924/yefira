@@ -37,6 +37,12 @@ public class BlockDataEncoder {
     public static final byte OPCODE_PING = 0x0E;
     public static final byte OPCODE_PONG = 0x0F;
 
+    // RFC v3.1 SyncDecision Constants (RFC Section 4.2)
+    public static final byte DECISION_VERIFIED_SKIP_REBUILD = 0x00;
+    public static final byte DECISION_REPLAY_DELTAS = 0x01;
+    public static final byte DECISION_FULL_BASELINE_REQUIRED = 0x02;
+    public static final byte DECISION_REJECTED = (byte) 0xFF;
+
     // Legacy Opcodes (backward compatibility)
     public static final byte PACKET_SELECTION_INFO = 0x01;
     public static final byte PACKET_FULL_SNAPSHOT = 0x02;
@@ -386,9 +392,12 @@ public class BlockDataEncoder {
             return blockId;
         }
 
+        List<Property<?>> sorted = new ArrayList<>(properties);
+        sorted.sort(Comparator.comparing(Property::getName));
+
         StringBuilder sb = new StringBuilder(blockId).append("[");
         boolean first = true;
-        for (Property<?> property : properties) {
+        for (Property<?> property : sorted) {
             if (!first) {
                 sb.append(",");
             }

@@ -75,32 +75,33 @@ public class XXHash64 {
     }
 
     public void update(byte b) {
-        byte[] arr = new byte[]{b};
-        update(arr, 0, 1);
+        totalLen++;
+        memory[memSize++] = b;
+        if (memSize == 32) {
+            v1 = round(v1, getLongLE(memory, 0));
+            v2 = round(v2, getLongLE(memory, 8));
+            v3 = round(v3, getLongLE(memory, 16));
+            v4 = round(v4, getLongLE(memory, 24));
+            memSize = 0;
+        }
     }
 
     public void updateLE16(short val) {
-        byte[] arr = new byte[2];
-        arr[0] = (byte) (val & 0xFF);
-        arr[1] = (byte) ((val >> 8) & 0xFF);
-        update(arr, 0, 2);
+        update((byte) (val & 0xFF));
+        update((byte) ((val >> 8) & 0xFF));
     }
 
     public void updateLE32(int val) {
-        byte[] arr = new byte[4];
-        arr[0] = (byte) (val & 0xFF);
-        arr[1] = (byte) ((val >> 8) & 0xFF);
-        arr[2] = (byte) ((val >> 16) & 0xFF);
-        arr[3] = (byte) ((val >> 24) & 0xFF);
-        update(arr, 0, 4);
+        update((byte) (val & 0xFF));
+        update((byte) ((val >> 8) & 0xFF));
+        update((byte) ((val >> 16) & 0xFF));
+        update((byte) ((val >> 24) & 0xFF));
     }
 
     public void updateLE64(long val) {
-        byte[] arr = new byte[8];
         for (int i = 0; i < 8; i++) {
-            arr[i] = (byte) ((val >> (8 * i)) & 0xFF);
+            update((byte) ((val >> (8 * i)) & 0xFF));
         }
-        update(arr, 0, 8);
     }
 
     public long digest() {

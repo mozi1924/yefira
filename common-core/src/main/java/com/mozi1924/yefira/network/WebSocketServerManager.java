@@ -369,7 +369,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     null,
                     0, 0, 0,
                     0,
-                    (byte) 3, // REJECTED
+                    BlockDataEncoder.DECISION_REJECTED,
                     "No active selection"
             );
             sendSafe(conn, welcome);
@@ -380,8 +380,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         SelectionBox selection = sm.getCurrentSelection();
         String dimension = VersionCompat.level().getDimensionId(level);
 
-        ensureSessionState(level, selection, dimension);
-
+        boolean hasClientCache = (hello.cachedStateHash != 0) && !Arrays.equals(hello.cachedWorldUuid, new byte[16]);
         boolean matchesUuid = Arrays.equals(hello.cachedWorldUuid, serverUuidBytes);
         boolean matchesEpoch = hello.cachedEpoch == epoch;
         boolean matchesSeq = hello.cachedSeq == globalSeqId.get();
@@ -391,9 +390,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 && (hello.cachedSizeX == selection.getSizeX())
                 && (hello.cachedSizeY == selection.getSizeY())
                 && (hello.cachedSizeZ == selection.getSizeZ());
-        boolean matchesHash = (hello.cachedStateHash != 0) && (hello.cachedStateHash == cachedStateHash);
 
-        if (matchesUuid && matchesEpoch && matchesSeq && matchesBounds && matchesHash) {
+        if (hasClientCache && matchesUuid && matchesEpoch && matchesSeq && matchesBounds && cachedStateHash != 0 && hello.cachedStateHash == cachedStateHash) {
             Yefira.LOGGER.info("Client {} verified 100% in sync with scene! Sending VERIFIED_SKIP_REBUILD.", conn.getRemoteSocketAddress());
             byte[] welcome = BlockDataEncoder.encodeWelcome(
                     (short) 3,
@@ -403,7 +401,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     selection.getMin(),
                     selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
                     cachedStateHash,
-                    (byte) 0, // VERIFIED_SKIP_REBUILD
+                    BlockDataEncoder.DECISION_VERIFIED_SKIP_REBUILD,
                     dimension
             );
             sendSafe(conn, welcome);
@@ -417,18 +415,12 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     selection.getMin(),
                     selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
                     cachedStateHash,
-                    (byte) 2, // FULL_BASELINE_REQUIRED
+                    BlockDataEncoder.DECISION_FULL_BASELINE_REQUIRED,
                     dimension
             );
             if (sendSafe(conn, welcome)) {
                 streamingExecutor.submit(() -> sendBaselineToClient(conn, level, selection));
             }
-        }
-    }
-
-    private void ensureSessionState(Level level, SelectionBox selection, String dimension) {
-        if (cachedStateHash == 0 && level != null && selection != null) {
-            cachedStateHash = CanonicalVoxelScanner.computeCanonicalStateHash(level, selection, dimension);
         }
     }
 
