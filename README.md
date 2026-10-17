@@ -11,6 +11,10 @@
 
 通过内置轻量化 WebSocket 通信架构与高频方块状态编码器，Yefira 能够将游戏内指定 3D 选区的方块数据、增量变化实时推送至 Blender 视口中构建三维点云与模型；同时支持类似 Blender 视口的 Ghost 模式自由漫游与射线选区操作。
 
+> **权威协议规范**：服务端与 DCC 客户端之间的二进制帧、`state_hash`、基线/增量状态机、
+> 资源硬限与错误恢复契约，以
+> **[RFC v3.1: MTK 2.0 Live Sync 协议与架构设计规范](../MoziToolKit/docs/live_sync/live_sync_protocol.md)** 为准。
+
 ---
 
 ## 🏛️ 项目多版本架构 (Multi-Version Architecture)

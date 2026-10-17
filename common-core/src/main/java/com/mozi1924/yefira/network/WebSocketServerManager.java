@@ -82,6 +82,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     /** Set when block changes overflowed the deferred queue during a long baseline. */
     private boolean pendingDeltaOverflow = false;
     private static final int MAX_PENDING_DELTA_CHANGES = 262_144;
+    private static final int MAX_DELTA_BATCH_CHANGES = 16_384;
 
     private static java.util.concurrent.ExecutorService createStreamingExecutor() {
         // Bounded worker count: baseline scans allocate int[] voxel buffers, so an
@@ -528,8 +529,12 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 && (hello.cachedSizeX == selection.getSizeX())
                 && (hello.cachedSizeY == selection.getSizeY())
                 && (hello.cachedSizeZ == selection.getSizeZ());
+        boolean matchesDimension = hello.cachedDimension != null
+                && !hello.cachedDimension.isEmpty()
+                && hello.cachedDimension.equals(dimension);
 
-        if (hasClientCache && matchesUuid && matchesEpoch && matchesSeq && matchesBounds && cachedStateHash != 0 && hello.cachedStateHash == cachedStateHash) {
+        if (hasClientCache && matchesUuid && matchesEpoch && matchesSeq && matchesBounds
+                && matchesDimension && cachedStateHash != 0 && hello.cachedStateHash == cachedStateHash) {
             Yefira.LOGGER.info("Client {} verified 100% in sync with scene! Sending VERIFIED_SKIP_REBUILD.", conn.getRemoteSocketAddress());
             byte[] welcome = BlockDataEncoder.encodeWelcome(
                     (short) 3,
@@ -743,9 +748,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     public boolean broadcastDeltaUpdate(SelectionBox selection, List<BlockDataEncoder.BlockChangeEntry> changes) {
         if (clients.isEmpty() || changes.isEmpty()) return true;
         try {
-            byte[] palPkt = null;
-            byte[] deltaPkt;
-
             synchronized (paletteLock) {
                 // Re-check under the palette lock: a baseline may have started between
                 // the caller's fast-path check and acquiring this lock. Encoding with
@@ -754,45 +756,56 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     return false;
                 }
 
-                long seqId = globalSeqId.incrementAndGet();
-                List<Map.Entry<Integer, String>> newPaletteEntries = new ArrayList<>();
-                List<BlockDataEncoder.DeltaEntry> deltaEntries = new ArrayList<>(changes.size());
-
                 BlockPos min = selection.getMin();
-                for (BlockDataEncoder.BlockChangeEntry c : changes) {
-                    int rx = c.pos().getX() - min.getX();
-                    int ry = c.pos().getY() - min.getY();
-                    int rz = c.pos().getZ() - min.getZ();
 
-                    String stateStr = CanonicalVoxelScanner.normalizeCanonicalBlockState(c.state());
-                    Integer stateId = blockPaletteLookup.get(stateStr);
-                    if (stateId == null) {
-                        stateId = blockPaletteList.size();
-                        blockPaletteList.add(stateStr);
-                        blockPaletteLookup.put(stateStr, stateId);
-                        newPaletteEntries.add(new AbstractMap.SimpleEntry<>(stateId, stateStr));
+                // RFC v3.1 §2.2: one DELTA_OP may carry at most 16,384 changes and
+                // every batch must occupy its own monotonically increasing sequence ID.
+                // Split the flush into contiguous batches instead of overflowing the
+                // uint16 change counter in the wire format.
+                for (int start = 0; start < changes.size(); start += MAX_DELTA_BATCH_CHANGES) {
+                    int end = Math.min(changes.size(), start + MAX_DELTA_BATCH_CHANGES);
+                    List<BlockDataEncoder.BlockChangeEntry> batch = changes.subList(start, end);
+
+                    long seqId = globalSeqId.incrementAndGet();
+                    List<Map.Entry<Integer, String>> newPaletteEntries = new ArrayList<>();
+                    List<BlockDataEncoder.DeltaEntry> deltaEntries = new ArrayList<>(batch.size());
+
+                    for (BlockDataEncoder.BlockChangeEntry c : batch) {
+                        int rx = c.pos().getX() - min.getX();
+                        int ry = c.pos().getY() - min.getY();
+                        int rz = c.pos().getZ() - min.getZ();
+
+                        String stateStr = CanonicalVoxelScanner.normalizeCanonicalBlockState(c.state());
+                        Integer stateId = blockPaletteLookup.get(stateStr);
+                        if (stateId == null) {
+                            stateId = blockPaletteList.size();
+                            blockPaletteList.add(stateStr);
+                            blockPaletteLookup.put(stateStr, stateId);
+                            newPaletteEntries.add(new AbstractMap.SimpleEntry<>(stateId, stateStr));
+                        }
+                        deltaEntries.add(new BlockDataEncoder.DeltaEntry(rx, ry, rz, stateId));
                     }
-                    deltaEntries.add(new BlockDataEncoder.DeltaEntry(rx, ry, rz, stateId));
-                }
 
-                if (!newPaletteEntries.isEmpty()) {
-                    int oldRev = paletteRevision;
-                    paletteRevision++;
-                    palPkt = BlockDataEncoder.encodePaletteUpdate(epoch, seqId, oldRev, paletteRevision, newPaletteEntries);
-                }
-                deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
+                    byte[] palPkt = null;
+                    if (!newPaletteEntries.isEmpty()) {
+                        int oldRev = paletteRevision;
+                        paletteRevision++;
+                        palPkt = BlockDataEncoder.encodePaletteUpdate(epoch, seqId, oldRev, paletteRevision, newPaletteEntries);
+                    }
+                    byte[] deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
 
-                // Send while still holding paletteLock so a concurrently starting
-                // baseline can neither capture its snapshot barrier before this batch
-                // nor reset the palette between encoding and transmission. WebSocket
-                // send() only enqueues the frame, so the lock is held briefly.
-                if (palPkt != null) {
+                    // Send while still holding paletteLock so a concurrently starting
+                    // baseline can neither capture its snapshot barrier before this batch
+                    // nor reset the palette between encoding and transmission. WebSocket
+                    // send() only enqueues the frame, so the lock is held briefly.
+                    if (palPkt != null) {
+                        for (WebSocket client : List.copyOf(clients)) {
+                            sendSafe(client, palPkt);
+                        }
+                    }
                     for (WebSocket client : List.copyOf(clients)) {
-                        sendSafe(client, palPkt);
+                        sendSafe(client, deltaPkt);
                     }
-                }
-                for (WebSocket client : List.copyOf(clients)) {
-                    sendSafe(client, deltaPkt);
                 }
             }
             return true;
@@ -803,6 +816,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     public void queueDeltaUpdate(SelectionBox selection, BlockDataEncoder.BlockChangeEntry change) {
+        // Any world mutation invalidates the zero-rebuild fast path: the server's
+        // cached snapshot hash no longer describes the authoritative world state.
+        cachedStateHash = 0;
         if (clients.isEmpty()) return;
         synchronized (pendingDeltaChanges) {
             if (pendingDeltaSelection != null && !sameBounds(pendingDeltaSelection, selection)) {
