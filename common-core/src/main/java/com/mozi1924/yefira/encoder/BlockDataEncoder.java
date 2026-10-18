@@ -41,6 +41,15 @@ public class BlockDataEncoder {
     /** RFC v3.1 hard selection volume limit (voxels). */
     public static final long MAX_SELECTION_VOLUME = 33_554_432L;
 
+    /** RFC v3.1 diagnostic error code: UnsupportedVersion. */
+    public static final short ERROR_UNSUPPORTED_VERSION = 0x0001;
+
+    /** RFC v3.1 diagnostic error code: InvalidBounds. */
+    public static final short ERROR_INVALID_BOUNDS = 0x0002;
+
+    /** RFC v3.1 diagnostic error code: UnknownOpcode. */
+    public static final short ERROR_UNKNOWN_OPCODE = 0x0007;
+
     /** RFC v3.1 diagnostic error code: ResourceLimitExceeded. */
     public static final short ERROR_RESOURCE_LIMIT_EXCEEDED = 0x0005;
 
@@ -360,6 +369,23 @@ public class BlockDataEncoder {
             e.printStackTrace();
         }
         return baos.toByteArray();
+    }
+
+    /** RFC v3.1 CANCEL payload; a zero UUID cancels the current epoch. */
+    public static byte[] encodeCancel(long epoch, byte[] snapshotUuid, byte reason) {
+        ByteBuffer buf = ByteBuffer.allocate(4 + 8 + 16 + 1);
+        buf.order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(MAGIC);
+        buf.put(PROTOCOL_VERSION);
+        buf.put(OPCODE_CANCEL);
+        buf.putLong(epoch);
+        if (snapshotUuid != null && snapshotUuid.length >= 16) {
+            buf.put(snapshotUuid, 0, 16);
+        } else {
+            buf.put(new byte[16]);
+        }
+        buf.put(reason);
+        return buf.array();
     }
 
     public static byte[] encodePong(long timestamp) {

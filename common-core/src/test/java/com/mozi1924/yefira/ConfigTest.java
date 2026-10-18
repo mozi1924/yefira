@@ -10,9 +10,10 @@ public class ConfigTest {
     public void testConfigDefaultsAndSetters() {
         YefiraConfig config = new YefiraConfig();
 
-        Assertions.assertEquals("0.0.0.0", config.getHost());
+        Assertions.assertEquals("127.0.0.1", config.getHost());
         Assertions.assertEquals(8765, config.getPort());
         Assertions.assertFalse(config.isAutoStartOnWorldLoad());
+        Assertions.assertEquals("", config.getAuthToken());
 
         config.setHost("127.0.0.1");
         Assertions.assertEquals("127.0.0.1", config.getHost());

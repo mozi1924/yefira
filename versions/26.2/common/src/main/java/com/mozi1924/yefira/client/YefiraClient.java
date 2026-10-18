@@ -76,10 +76,12 @@ public class YefiraClient {
                     Yefira.LOGGER.info("Loaded server selection for IP: {}", serverData.ip);
                 }
             }
-            YefiraConfig cfg = YefiraConfig.getInstance();
-            if (cfg.isAutoStartOnWorldLoad()) {
-                WebSocketServerManager.getInstance().startServer(cfg.getHost(), cfg.getPort());
-            }
+            // Remote multiplayer: the authoritative selection/world lives on the
+            // dedicated server. Never open a local unauthenticated server here;
+            // the DCC must connect to the server's Yefira endpoint (if installed).
+            Yefira.LOGGER.info(
+                "Remote server detected; local WebSocket server auto-start is disabled. "
+                    + "Connect the DCC to the server's Yefira endpoint.");
         }
     }
 
@@ -131,7 +133,7 @@ public class YefiraClient {
 
         if (keyClear != null) {
             while (keyClear.consumeClick()) {
-                SelectionManager.getInstance().clearSelection();
+                GhostModeManager.getInstance().clearSelectionAndSync();
             }
         }
 

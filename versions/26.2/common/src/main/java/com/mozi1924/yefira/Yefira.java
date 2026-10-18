@@ -1,5 +1,6 @@
 package com.mozi1924.yefira;
 
+import com.mozi1924.yefira.compat.ServerThread;
 import com.mozi1924.yefira.config.YefiraConfig;
 import com.mozi1924.yefira.network.WebSocketServerManager;
 import com.mozi1924.yefira.selection.SelectionManager;
@@ -36,17 +37,30 @@ public class Yefira {
      * Common server started lifecycle hook.
      */
     public static void onServerStarted(MinecraftServer server) {
+        ServerThread.setExecutor(server::execute);
+
         Path worldDir = server.getWorldPath(LevelResource.ROOT);
         Path storagePath = SelectionStorageManager.getWorldStoragePath(worldDir);
-        ServerLevel level = server.overworld();
-        boolean loaded = SelectionManager.getInstance().loadSavedSelection(storagePath, level);
-        if (loaded) {
-            LOGGER.info("Loaded saved selection for world: {}", worldDir.getFileName());
+        SelectionStorageManager.SelectionData saved = SelectionStorageManager.loadFromPath(storagePath);
+        ServerLevel level = saved != null && saved.dimension() != null
+                ? server.getLevel(saved.dimension())
+                : server.overworld();
+        if (level == null) {
+            LOGGER.warn("Saved selection dimension is not loaded; ignoring saved selection.");
+            SelectionManager.getInstance().resetOnWorldUnload();
+        } else {
+            boolean loaded = SelectionManager.getInstance().loadSavedSelection(storagePath, level);
+            if (loaded) {
+                LOGGER.info("Loaded saved selection for world: {}", worldDir.getFileName());
+            }
         }
 
         YefiraConfig cfg = YefiraConfig.getInstance();
         if (cfg.isAutoStartOnWorldLoad()) {
-            WebSocketServerManager.getInstance().startServer(cfg.getHost(), cfg.getPort());
+            boolean started = WebSocketServerManager.getInstance().startServer(cfg.getHost(), cfg.getPort());
+            if (!started) {
+                LOGGER.error("WebSocket Server auto-start failed; check the configured host/port/auth token.");
+            }
         } else {
             LOGGER.info("WebSocket Server auto-start is disabled (on-demand mode).");
         }
@@ -56,6 +70,7 @@ public class Yefira {
      * Common server stopping lifecycle hook.
      */
     public static void onServerStopping(MinecraftServer server) {
+        ServerThread.clear();
         WebSocketServerManager.getInstance().stopServer();
         SelectionManager.getInstance().resetOnWorldUnload();
     }

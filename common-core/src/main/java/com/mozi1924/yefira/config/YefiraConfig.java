@@ -25,11 +25,14 @@ public class YefiraConfig {
 
     private static YefiraConfig instance = new YefiraConfig();
 
-    private String host = "0.0.0.0";
+    // Bind to loopback by default. A non-loopback host requires a non-empty
+    // authToken; the WebSocket server refuses to start otherwise.
+    private String host = "127.0.0.1";
     private int port = 8765;
     private boolean autoStartOnWorldLoad = false;
     private long maxVolumeSoftLimit = 262144L; // Default 64x64x64 = 262,144 blocks
     private int maxSideSoftLimit = 256;        // Default 256 max single side length
+    private String authToken = "";
 
     public static YefiraConfig getInstance() {
         return instance;
@@ -71,10 +74,14 @@ public class YefiraConfig {
                     cfg.maxSideSoftLimit = ms;
                 }
             }
+            if (obj.has("authToken")) {
+                cfg.authToken = obj.get("authToken").getAsString().trim();
+            }
 
             instance = cfg;
-            Yefira.LOGGER.info("Loaded Yefira config: host={}, port={}, autoStart={}, maxVolumeSoftLimit={}, maxSideSoftLimit={}",
-                    instance.host, instance.port, instance.autoStartOnWorldLoad, instance.maxVolumeSoftLimit, instance.maxSideSoftLimit);
+            Yefira.LOGGER.info("Loaded Yefira config: host={}, port={}, autoStart={}, maxVolumeSoftLimit={}, maxSideSoftLimit={}, authTokenConfigured={}",
+                    instance.host, instance.port, instance.autoStartOnWorldLoad, instance.maxVolumeSoftLimit, instance.maxSideSoftLimit,
+                    instance.authToken != null && !instance.authToken.isEmpty());
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to load Yefira config, falling back to defaults", e);
             instance = new YefiraConfig();
@@ -91,6 +98,7 @@ public class YefiraConfig {
             obj.addProperty("autoStartOnWorldLoad", instance.autoStartOnWorldLoad);
             obj.addProperty("maxVolumeSoftLimit", instance.maxVolumeSoftLimit);
             obj.addProperty("maxSideSoftLimit", instance.maxSideSoftLimit);
+            obj.addProperty("authToken", instance.authToken == null ? "" : instance.authToken);
 
             if (configPath.getParent() != null && !Files.exists(configPath.getParent())) {
                 Files.createDirectories(configPath.getParent());
@@ -148,5 +156,13 @@ public class YefiraConfig {
         if (maxSideSoftLimit > 0) {
             this.maxSideSoftLimit = maxSideSoftLimit;
         }
+    }
+
+    public String getAuthToken() {
+        return authToken == null ? "" : authToken;
+    }
+
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken == null ? "" : authToken.trim();
     }
 }

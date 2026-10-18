@@ -5,7 +5,6 @@
   "key.yefira.focus": "镜头聚焦至当前选区",
   "key.yefira.clear": "一键清空活动选区",
   "key.yefira.preset_box": "快速生成 16x16 预设选区",
-
   "yefira.gui.title": "Yefira 控制面板",
   "yefira.gui.mode.client": "💻 本地客户端同步",
   "yefira.gui.mode.server": "🌐 远程服务端同步",
@@ -23,7 +22,6 @@
   "yefira.gui.status.stopped": "○ WebSocket 服务已停止",
   "yefira.gui.selection.info": "选区: %s 至 %s | 尺寸: %sx%sx%s (%s 方块)",
   "yefira.gui.selection.none": "当前无选区",
-
   "yefira.hud.title.ghost": "👻 [Yefira 幽灵模式]",
   "yefira.hud.hints.ghost": "左键拖拽: 框选/手柄 | 中键: 旋转 | Shift+中键: 平移 | 滚轮/Ctrl+中键: 缩放 | F: 聚焦 | O: 面板 | X: 清空",
   "yefira.hud.server.running": "● 服务在线 (%s)",
@@ -33,7 +31,6 @@
   "yefira.hud.hovered.block": "目标方块: %s (按住左键拖拽框选)",
   "yefira.hud.dragging.info": "📦 正在拖拽选区: %sx%sx%s (%s 方块) [松开左键完成，按右键/ESC取消]",
   "yefira.hud.dragging.oversized": "⚠️ [选区过大] 正在拖拽: %sx%sx%s (%s 方块) [已超出推荐阈值]",
-
   "yefira.command.pos1.set": "§a[Yefira] 第一点坐标已设为 %s",
   "yefira.command.pos2.set": "§a[Yefira] 第二点坐标已设为 %s",
   "yefira.command.box.set": "§a[Yefira] 选区已设定: %s 至 %s (尺寸: %sx%sx%s, 共 %s 方块)",
@@ -61,6 +58,9 @@
   "yefira.command.gui.unavailable": "§c[Yefira] 控制面板仅支持在客户端或单人游戏中打开，在专用服务器上请直接使用 /yefira 相关命令。",
   "yefira.command.dump.success": "§a[Yefira] 已将 %s 个朝向方块模型导出至 %s",
   "yefira.command.dump.failed": "§c[Yefira] 导出方块模型失败: %s",
-
-  "yefira.gui.selection.oversized": "⚠️ 选区: %s 至 %s | 尺寸: %sx%sx%s (%s 方块) [过大警告]"
+  "yefira.gui.selection.oversized": "⚠️ 选区: %s 至 %s | 尺寸: %sx%sx%s (%s 方块) [过大警告]",
+  "yefira.command.config.token.info": "认证令牌已配置: %s",
+  "yefira.command.config.token.set": "认证令牌已更新（已配置: %s）。若服务器正在运行，请重启后生效。",
+  "yefira.command.server.start_failed": "无法在 %s:%s 启动 WebSocket 服务（端口占用、地址无效，或非回环地址未配置认证令牌）。",
+  "yefira.gui.mode.client.unavailable": "多人游戏中不可用客户端 Live Sync。请将 DCC 连接到服务器的 Yefira 服务。"
 }

@@ -44,7 +44,12 @@ public class LevelCompat1214 implements ILevelCompat {
 
     @Override
     public boolean hasAdminPermission(net.minecraft.commands.CommandSourceStack source) {
-        return (source.getServer() != null && !source.getServer().isDedicatedServer()) || source.hasPermission(2);
+        if (source.getServer() != null && !source.getServer().isDedicatedServer()) {
+            if (source.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+                return source.getServer().isSingleplayerOwner(player.getGameProfile());
+            }
+        }
+        return source.hasPermission(2);
     }
 
     @Override

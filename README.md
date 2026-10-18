@@ -270,6 +270,7 @@ mc-sync-blender/
 /yefira config host [<ip>]                  # 查看或修改 WebSocket 监听 IP
 /yefira config port [<port>]                # 查看或修改 WebSocket 端口 (1024-65535)
 /yefira config autostart [<true|false>]     # 查看或切换进服自动启动
+/yefira config token [<secret>]             # 设置非回环绑定所需的共享认证令牌
 ```
 
 ---
@@ -280,15 +281,17 @@ mc-sync-blender/
 
 ```json
 {
-  "host": "0.0.0.0",
+  "host": "127.0.0.1",
   "port": 8765,
-  "autoStartOnWorldLoad": false
+  "autoStartOnWorldLoad": false,
+  "authToken": ""
 }
 ```
 
-* `host`: WebSocket 监听绑定的 IP 地址（默认 `0.0.0.0`，允许外部 DCC 工具连接）。
+* `host`: WebSocket 监听绑定的 IP 地址（默认 `127.0.0.1`）。绑定非回环地址时必须同时配置 `authToken`，否则服务拒绝启动。
 * `port`: WebSocket 端口（默认 `8765`，需与 Blender 插件设置一致）。
 * `autoStartOnWorldLoad`: 进入单人世界或服务器启动时是否自动启动 WebSocket 服务。
+* `authToken`: 非回环绑定所需的共享密钥；Blender 端需填写相同值。为空时仅允许 `127.0.0.1`。
 
 ---
 

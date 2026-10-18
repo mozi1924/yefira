@@ -33,6 +33,15 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v4
 
+      - name: validate loader metadata filenames
+        run: |
+          # NeoForge 20.4.x uses FML 2.0.17, which only reads META-INF/mods.toml.
+          test -f versions/1.20.4/neoforge/src/main/resources/META-INF/mods.toml
+          # NeoForge 21.1+ uses FML 4+/11+, which reads META-INF/neoforge.mods.toml.
+          for v in 1.21.1 1.21.4 26.2; do
+            test -f versions/$v/neoforge/src/main/resources/META-INF/neoforge.mods.toml
+          done
+
       - name: validate gradle wrapper
         uses: gradle/actions/wrapper-validation@v4
 

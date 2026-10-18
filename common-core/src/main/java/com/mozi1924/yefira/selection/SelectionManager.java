@@ -51,7 +51,9 @@ public class SelectionManager {
         this.dimension = level != null ? level.dimension() : null;
         SelectionStorageManager.SelectionData data = SelectionStorageManager.loadFromPath(storagePath);
         if (data != null) {
-            this.dimension = data.dimension();
+            this.dimension = data.dimension() != null
+                    ? data.dimension()
+                    : (level != null ? level.dimension() : null);
             this.pos1 = data.pos1();
             this.pos2 = data.pos2();
             this.currentSelection = new SelectionBox(pos1, pos2);
@@ -130,6 +132,13 @@ public class SelectionManager {
                     currentSelection.getVolume());
             if (activeStoragePath != null) {
                 SelectionStorageManager.saveToPath(activeStoragePath, pos1, pos2, dimension);
+            }
+            // A ClientLevel selection is a render-only preview. The authoritative
+            // selection is applied on the server (via /yefira box) so the scanner
+            // never reads ClientLevel chunks and multiplayer clients cannot
+            // silently diverge from the dedicated server.
+            if (currentLevel != null && currentLevel.isClientSide()) {
+                return;
             }
             for (SelectionChangeListener listener : listeners) {
                 listener.onSelectionChanged(currentLevel, currentSelection);

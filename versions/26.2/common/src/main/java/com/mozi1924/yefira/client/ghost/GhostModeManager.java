@@ -397,6 +397,7 @@ public class GhostModeManager {
                 if (isBoxCreating) {
                     if (boxCreateStartPos != null && boxCreateCurrentPos != null && mc.level != null) {
                         SelectionManager.getInstance().setPositions(mc.level, boxCreateStartPos, boxCreateCurrentPos);
+                        syncSelectionToServer(boxCreateStartPos, boxCreateCurrentPos);
                     }
                     isBoxCreating = false;
                     boxCreateStartPos = null;
@@ -419,6 +420,33 @@ public class GhostModeManager {
         }
 
         return true;
+    }
+
+
+    /** Apply the current local selection on the authoritative server. */
+    private void syncSelectionToServer(BlockPos p1, BlockPos p2) {
+        if (p1 == null || p2 == null) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.player.connection == null) return;
+        try {
+            mc.player.connection.sendCommand(
+                "yefira box " + p1.getX() + " " + p1.getY() + " " + p1.getZ()
+                    + " " + p2.getX() + " " + p2.getY() + " " + p2.getZ());
+        } catch (Exception e) {
+            Yefira.LOGGER.debug("Failed to sync selection to server: {}", e.getMessage());
+        }
+    }
+
+    /** Clear both the local preview and the server-authoritative selection. */
+    public void clearSelectionAndSync() {
+        SelectionManager.getInstance().clearSelection();
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.player.connection == null) return;
+        try {
+            mc.player.connection.sendCommand("yefira clear");
+        } catch (Exception e) {
+            Yefira.LOGGER.debug("Failed to clear server selection: {}", e.getMessage());
+        }
     }
 
     public void cancelBoxDrag() {
@@ -735,6 +763,7 @@ public class GhostModeManager {
         BlockPos p1 = basePos.offset(-half, 0, -half);
         BlockPos p2 = basePos.offset(half - 1, size - 1, half - 1);
         SelectionManager.getInstance().setPositions(mc.level, p1, p2);
+        syncSelectionToServer(p1, p2);
         focusSelection();
     }
 
@@ -816,6 +845,7 @@ public class GhostModeManager {
             if (mc.level != null && dragPreviewPos1 != null && dragPreviewPos2 != null) {
                 if (!dragPreviewPos1.equals(initialPos1) || !dragPreviewPos2.equals(initialPos2)) {
                     SelectionManager.getInstance().setPositions(mc.level, dragPreviewPos1, dragPreviewPos2);
+                    syncSelectionToServer(dragPreviewPos1, dragPreviewPos2);
                 }
             }
         }

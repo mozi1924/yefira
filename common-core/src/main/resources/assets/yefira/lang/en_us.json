@@ -5,7 +5,6 @@
   "key.yefira.focus": "Focus Camera on Selection",
   "key.yefira.clear": "Clear Active Selection",
   "key.yefira.preset_box": "Create 16x16 Preset Box",
-
   "yefira.gui.title": "Yefira Control Panel",
   "yefira.gui.mode.client": "💻 Local Client Sync",
   "yefira.gui.mode.server": "🌐 Remote Server Sync",
@@ -23,7 +22,6 @@
   "yefira.gui.status.stopped": "○ WebSocket Server Stopped",
   "yefira.gui.selection.info": "Selection: %s to %s | Size: %sx%sx%s (%s blocks)",
   "yefira.gui.selection.none": "No active selection",
-
   "yefira.hud.title.ghost": "👻 [Yefira Ghost Mode]",
   "yefira.hud.hints.ghost": "LMB Drag: Box/Gizmo | MMB: Orbit | Shift+MMB: Pan | Scroll/Ctrl+MMB: Zoom | F: Focus | O: Panel | X: Clear",
   "yefira.hud.server.running": "● WS Active (%s)",
@@ -33,7 +31,6 @@
   "yefira.hud.hovered.block": "Target: %s (Hold LMB & Drag to select)",
   "yefira.hud.dragging.info": "📦 Drag-Selecting: %sx%sx%s (%s blocks) [Release LMB to finish, RMB/ESC to cancel]",
   "yefira.hud.dragging.oversized": "⚠️ [OVERSIZED] Drag-Selecting: %sx%sx%s (%s blocks) [Exceeds recommended limit]",
-
   "yefira.command.pos1.set": "§a[Yefira] First position set to %s",
   "yefira.command.pos2.set": "§a[Yefira] Second position set to %s",
   "yefira.command.box.set": "§a[Yefira] Selection set: %s to %s (Size: %sx%sx%s, %s blocks)",
@@ -61,6 +58,9 @@
   "yefira.command.gui.unavailable": "§c[Yefira] Control panel is only available on client or singleplayer. On dedicated servers, please use /yefira commands.",
   "yefira.command.dump.success": "§a[Yefira] Dumped %s directional models to %s",
   "yefira.command.dump.failed": "§c[Yefira] Failed to dump models: %s",
-
-  "yefira.gui.selection.oversized": "⚠️ Selection: %s to %s | Size: %sx%sx%s (%s blocks) [Oversized]"
+  "yefira.gui.selection.oversized": "⚠️ Selection: %s to %s | Size: %sx%sx%s (%s blocks) [Oversized]",
+  "yefira.command.config.token.info": "Auth token configured: %s",
+  "yefira.command.config.token.set": "Auth token updated (configured: %s). Restart the server if it is running.",
+  "yefira.command.server.start_failed": "Failed to start WebSocket server on %s:%s (port in use, invalid host, or missing auth token for a non-loopback host).",
+  "yefira.gui.mode.client.unavailable": "Client-side Live Sync is unavailable in multiplayer. Connect the DCC to the server's Yefira endpoint."
 }

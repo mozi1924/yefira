@@ -1,13 +1,16 @@
 package com.mozi1924.yefira.network;
 
 import com.mozi1924.yefira.Yefira;
+import com.mozi1924.yefira.compat.ServerThread;
 import com.mozi1924.yefira.compat.VersionCompat;
+import com.mozi1924.yefira.config.YefiraConfig;
 import com.mozi1924.yefira.encoder.BlockDataEncoder;
 import com.mozi1924.yefira.selection.SelectionBox;
 import com.mozi1924.yefira.selection.SelectionManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import org.java_websocket.WebSocket;
+import org.java_websocket.drafts.Draft_6455;
 import org.java_websocket.enums.Opcode;
 import org.java_websocket.exceptions.WebsocketNotConnectedException;
 import org.java_websocket.framing.Framedata;
@@ -16,10 +19,16 @@ import org.java_websocket.framing.PongFrame;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import com.mozi1924.yefira.encoder.CanonicalVoxelScanner;
 import com.mozi1924.yefira.encoder.XXHash64;
@@ -28,11 +37,21 @@ import com.mozi1924.yefira.encoder.XXHash64;
 public class WebSocketServerManager implements SelectionManager.SelectionChangeListener {
 
     private static final WebSocketServerManager INSTANCE = new WebSocketServerManager();
-    private static String HOST = "0.0.0.0";
+    private static String HOST = "127.0.0.1";
     private static int PORT = 8765;
 
+    /** RFC v3.1 message limit; Java-WebSocket defaults to Integer.MAX_VALUE. */
+    private static final int MAX_FRAME_SIZE = 512 * 1024;
+    private static final int MAX_CONNECTIONS = 8;
+    private static final long HANDSHAKE_TIMEOUT_MS = 5_000L;
+
     private Impl serverImpl;
+    private volatile boolean serverStarted = false;
+    private volatile CountDownLatch startLatch = new CountDownLatch(1);
     private final Set<WebSocket> clients = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    /** Connections that completed the WebSocket handshake but not HELLO yet. */
+    private final Set<WebSocket> pendingClients = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private final Map<WebSocket, Long> pendingSince = new ConcurrentHashMap<>();
     private final Map<BlockPos, BlockDataEncoder.BlockChangeEntry> pendingDeltaChanges = new LinkedHashMap<>();
     private SelectionBox pendingDeltaSelection;
     private long lastManifestBroadcastTick = 0;
@@ -51,6 +70,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         public byte throttleMode = 0; // 0 = NORMAL, 1 = ECO, 2 = PAUSED
         public byte targetFps = 60;
         public boolean isActive = true;
+        public long lastRefreshAt = 0L;
+        public long lastResyncAt = 0L;
     }
 
     private final Map<WebSocket, ClientConfig> clientConfigs = new ConcurrentHashMap<>();
@@ -121,7 +142,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     public synchronized boolean isRunning() {
-        return serverImpl != null;
+        return serverImpl != null && serverStarted;
     }
 
     public int getConnectedCount() {
@@ -133,38 +154,69 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
 
-    public synchronized void startServer() {
-        startServer(HOST, PORT);
+    public synchronized boolean startServer() {
+        return startServer(HOST, PORT);
     }
 
-    public synchronized void startServer(String host, int port) {
+    public synchronized boolean startServer(String host, int port) {
+        if (serverImpl != null && serverStarted) {
+            Yefira.LOGGER.info("WebSocket Server is already running on {}:{}", HOST, PORT);
+            return true;
+        }
         setHost(host);
         setPort(port);
 
-        if (serverImpl != null) {
-            Yefira.LOGGER.info("WebSocket Server is already running on {}:{}", HOST, PORT);
-            return;
+        String token = YefiraConfig.getInstance().getAuthToken();
+        if (!isLoopbackHost(HOST) && (token == null || token.isEmpty())) {
+            Yefira.LOGGER.error(
+                "Refusing to bind WebSocket Server to non-loopback host {} without authToken. "
+                    + "Set /yefira config token <secret> or bind 127.0.0.1.",
+                HOST
+            );
+            return false;
         }
+
         try {
-            serverImpl = new Impl(new InetSocketAddress(HOST, PORT));
+            startLatch = new CountDownLatch(1);
+            serverStarted = false;
+            serverImpl = new Impl(
+                new InetSocketAddress(HOST, PORT),
+                new Draft_6455(Collections.emptyList(), MAX_FRAME_SIZE)
+            );
             serverImpl.setReuseAddr(true);
+            serverImpl.setMaxPendingConnections(MAX_CONNECTIONS * 2);
             serverImpl.start();
+            boolean started = startLatch.await(3, TimeUnit.SECONDS) && serverStarted;
+            if (!started) {
+                Yefira.LOGGER.error("WebSocket Server failed to bind {}:{} (see onError above)", HOST, PORT);
+                try {
+                    serverImpl.stop(500);
+                } catch (Exception ignored) {
+                } finally {
+                    serverImpl = null;
+                    serverStarted = false;
+                }
+                return false;
+            }
             SelectionManager.getInstance().addListener(this);
             Yefira.LOGGER.info("WebSocket Server started on {}:{}", HOST, PORT);
+            return true;
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to start WebSocket Server on " + HOST + ":" + PORT, e);
             serverImpl = null;
+            serverStarted = false;
+            return false;
         }
     }
 
-    public synchronized void restartServer(String host, int port) {
+    public synchronized boolean restartServer(String host, int port) {
         stopServer();
-        startServer(host, port);
+        return startServer(host, port);
     }
 
-    public synchronized void restartServer() {
+    public synchronized boolean restartServer() {
         stopServer();
-        startServer(HOST, PORT);
+        return startServer(HOST, PORT);
     }
 
     public synchronized void stopServer() {
@@ -176,10 +228,21 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         for (WebSocket client : List.copyOf(clients)) {
             cancelClientStream(client);
         }
+        for (WebSocket client : List.copyOf(pendingClients)) {
+            cancelClientStream(client);
+            try {
+                client.close(1001, "Server stopping");
+            } catch (Exception ignored) {
+            }
+        }
         clientConfigs.clear();
         clients.clear();
+        pendingClients.clear();
+        pendingSince.clear();
         clientStreamGenerations.clear();
         clientSendLocks.clear();
+        serverStarted = false;
+        startLatch.countDown();
 
         java.util.concurrent.ExecutorService executor = streamingExecutor;
         streamingExecutor = createStreamingExecutor();
@@ -197,9 +260,20 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
     }
 
+    private static boolean isLoopbackHost(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(host.trim()).isLoopbackAddress();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private class Impl extends WebSocketServer {
-        public Impl(InetSocketAddress address) {
-            super(address);
+        public Impl(InetSocketAddress address, Draft_6455 draft) {
+            super(address, Collections.singletonList(draft));
         }
 
         @Override
@@ -216,10 +290,23 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
         @Override
         public void onOpen(WebSocket conn, ClientHandshake handshake) {
-            clients.add(conn);
+            // Native clients (Rust/Blender) send no Origin. Reject browser-origin
+            // connections by default: this endpoint streams the selected world.
+            String origin = handshake != null ? handshake.getFieldValue("Origin") : null;
+            if (origin != null && !origin.isBlank()) {
+                Yefira.LOGGER.warn("Rejecting DCC connection with browser Origin: {}", origin);
+                conn.close(1008, "Browser origins are not allowed");
+                return;
+            }
+            if (clients.size() + pendingClients.size() >= MAX_CONNECTIONS) {
+                Yefira.LOGGER.warn("Rejecting DCC connection: max connections ({}) reached", MAX_CONNECTIONS);
+                conn.close(1013, "Too many connections");
+                return;
+            }
+            pendingClients.add(conn);
+            pendingSince.put(conn, System.currentTimeMillis());
             clientConfigs.put(conn, new ClientConfig());
-            Yefira.LOGGER.info("New DCC client connected: {}", conn.getRemoteSocketAddress());
-            // RFC v3.1: Client initiates handshake by sending HELLO (0x01).
+            Yefira.LOGGER.info("New DCC client connected (pending HELLO): {}", conn.getRemoteSocketAddress());
         }
 
 
@@ -262,6 +349,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         public void onError(WebSocket conn, Exception ex) {
             if (conn != null) {
                 cleanupClient(conn);
+            } else {
+                // Global error: bind failure, selector death, etc.
+                serverStarted = false;
+                startLatch.countDown();
             }
             if (ex instanceof WebsocketNotConnectedException) {
                 Yefira.LOGGER.debug("WebSocket client disconnected: {}", conn != null ? conn.getRemoteSocketAddress() : "unknown");
@@ -272,6 +363,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
         @Override
         public void onStart() {
+            serverStarted = true;
+            startLatch.countDown();
             Yefira.LOGGER.info("WebSocket Server successfully initialized.");
         }
     }
@@ -305,6 +398,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private void cleanupClient(WebSocket conn) {
         if (conn == null) return;
         clients.remove(conn);
+        pendingClients.remove(conn);
+        pendingSince.remove(conn);
         clientConfigs.remove(conn);
         clientStreamGenerations.remove(conn);
         clientSendLocks.remove(conn);
@@ -334,6 +429,18 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
      */
     public void startBaselineStream(WebSocket conn, Level level, SelectionBox selection) {
         if (conn == null || !conn.isOpen() || level == null || selection == null) {
+            return;
+        }
+        if (level.isClientSide()) {
+            // Never scan a ClientLevel: its chunks are partial/unloaded and reading
+            // them from a worker races the client tick. The selection must be
+            // applied on the server via the C2S selection packet.
+            Yefira.LOGGER.warn("Refusing to scan a client-side Level for {}; selection must be server-authoritative",
+                    conn.getRemoteSocketAddress());
+            sendSafe(conn, BlockDataEncoder.encodeError(
+                    epoch,
+                    BlockDataEncoder.ERROR_INVALID_BOUNDS,
+                    "Selection is not available on the server side"));
             return;
         }
         long streamGen = streamGenerationOf(conn).incrementAndGet();
@@ -399,9 +506,21 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     private void handleTextMessage(WebSocket conn, String message) {
         try {
-            if ("PING".equalsIgnoreCase(message.trim())) {
+            String trimmed = message == null ? "" : message.trim();
+            if ("PING".equalsIgnoreCase(trimmed)) {
                 sendSafe(conn, "PONG");
-            } else if ("REFRESH".equalsIgnoreCase(message.trim())) {
+                return;
+            }
+            if (!clients.contains(conn)) {
+                return;
+            }
+            if ("REFRESH".equalsIgnoreCase(trimmed)) {
+                ClientConfig cfg = clientConfigs.computeIfAbsent(conn, k -> new ClientConfig());
+                long now = System.currentTimeMillis();
+                if (now - cfg.lastRefreshAt < 1000L) {
+                    return;
+                }
+                cfg.lastRefreshAt = now;
                 SelectionManager selectionManager = SelectionManager.getInstance();
                 if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
                     startBaselineStream(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
@@ -416,6 +535,15 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private void handleBinaryMessage(WebSocket conn, ByteBuffer message) {
         try {
             if (message == null || message.remaining() < 4) return;
+            if (message.remaining() > MAX_FRAME_SIZE) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
+                        "Message exceeds the 512 KiB Live Sync limit"));
+                conn.close(1009, "Message too big");
+                cleanupClient(conn);
+                return;
+            }
 
             message.order(java.nio.ByteOrder.LITTLE_ENDIAN);
             byte b0 = message.get();
@@ -427,6 +555,24 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
             byte version = message.get();
             byte packetType = message.get();
+
+            if (version != BlockDataEncoder.PROTOCOL_VERSION) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_UNSUPPORTED_VERSION,
+                        "Unsupported protocol version " + (version & 0xFF)));
+                conn.close(1002, "Unsupported protocol version");
+                cleanupClient(conn);
+                return;
+            }
+
+            // Only HELLO/PING/SYNC_CONFIG are accepted before authentication.
+            if (packetType != BlockDataEncoder.OPCODE_HELLO
+                    && packetType != BlockDataEncoder.OPCODE_PING
+                    && packetType != BlockDataEncoder.PACKET_C2S_SYNC_CONFIG
+                    && !clients.contains(conn)) {
+                return;
+            }
 
             if (packetType == BlockDataEncoder.PACKET_C2S_SYNC_CONFIG) {
                 byte mode = message.remaining() > 0 ? message.get() : 0;
@@ -477,6 +623,12 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             }
 
             if (packetType == BlockDataEncoder.OPCODE_RESYNC_REQUEST || packetType == BlockDataEncoder.PACKET_C2S_REQ_FULL_SYNC) {
+                ClientConfig cfg = clientConfigs.computeIfAbsent(conn, k -> new ClientConfig());
+                long now = System.currentTimeMillis();
+                if (now - cfg.lastResyncAt < 900L) {
+                    return;
+                }
+                cfg.lastResyncAt = now;
                 SelectionManager sm = SelectionManager.getInstance();
                 if (sm.hasSelection() && sm.getCurrentLevel() != null) {
                     // Supersede any in-flight stream for this client before starting a new one.
@@ -497,7 +649,61 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
     }
 
+    private void activateClient(WebSocket conn) {
+        pendingClients.remove(conn);
+        pendingSince.remove(conn);
+        clients.add(conn);
+        clientConfigs.computeIfAbsent(conn, k -> new ClientConfig());
+        Yefira.LOGGER.info("DCC client authenticated: {}", conn.getRemoteSocketAddress());
+    }
+
+    private boolean isAuthorized(WebSocket conn, BlockDataEncoder.HelloPacket hello) {
+        String expected = YefiraConfig.getInstance().getAuthToken();
+        if (expected == null || expected.isEmpty()) {
+            // No token configured: loopback-only binding is enforced by startServer.
+            return true;
+        }
+        // YefiraConfig already trims the configured token; trim the presented one
+        // too so copy/paste whitespace cannot make two identical-looking tokens
+        // fail with "Authentication failed".
+        String provided = hello.authToken == null ? "" : hello.authToken.trim();
+        return MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.UTF_8),
+                provided.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void sendWelcomeRejected(WebSocket conn, String reason) {
+        byte[] welcome = BlockDataEncoder.encodeWelcome(
+                (short) 3,
+                serverUuidBytes,
+                epoch,
+                globalSeqId.get(),
+                null,
+                0, 0, 0,
+                0,
+                BlockDataEncoder.DECISION_REJECTED,
+                reason
+        );
+        sendSafe(conn, welcome);
+    }
+
     private void handleClientHello(WebSocket conn, BlockDataEncoder.HelloPacket hello) {
+        if (hello.minVersion > BlockDataEncoder.PROTOCOL_VERSION
+                || hello.maxVersion < BlockDataEncoder.PROTOCOL_VERSION) {
+            sendWelcomeRejected(conn, "Unsupported protocol version");
+            conn.close(1002, "Unsupported protocol version");
+            cleanupClient(conn);
+            return;
+        }
+        if (!isAuthorized(conn, hello)) {
+            Yefira.LOGGER.warn("Rejected DCC client {}: invalid auth token", conn.getRemoteSocketAddress());
+            sendWelcomeRejected(conn, "Authentication failed");
+            conn.close(1008, "Authentication failed");
+            cleanupClient(conn);
+            return;
+        }
+        activateClient(conn);
+
         SelectionManager sm = SelectionManager.getInstance();
         if (!sm.hasSelection() || sm.getCurrentLevel() == null) {
             byte[] welcome = BlockDataEncoder.encodeWelcome(
@@ -586,6 +792,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         clearPendingDeltaChanges();
         cachedStateHash = 0;
         selectionGeneration.incrementAndGet();
+        for (WebSocket client : List.copyOf(clients)) {
+            cancelClientStream(client);
+            sendSafe(client, BlockDataEncoder.encodeCancel(epoch, new byte[16], (byte) 0x01));
+        }
     }
 
     // --- 数据发送辅助方法 ---
@@ -621,6 +831,20 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 return;
             }
 
+            // Bound the chunk footprint independently of the voxel volume: a
+            // 4096x1x8192 selection is legal by volume but spans >100k chunks and
+            // would force the server thread to load the entire area.
+            long chunkColumns = (((long) selection.getSizeX() + 15L) / 16L)
+                    * (((long) selection.getSizeZ() + 15L) / 16L);
+            if (chunkColumns > 16_384L) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
+                        "Selection spans " + chunkColumns + " chunk columns; the Live Sync limit is 16384"));
+                Yefira.LOGGER.warn("Refusing to scan {} chunk columns for {}", chunkColumns, conn.getRemoteSocketAddress());
+                return;
+            }
+
             // Capture the snapshot barrier BEFORE scanning. Any block change applied
             // while the (potentially long) scan is running then receives a sequence
             // number greater than the snapshot and is replayed by the client.
@@ -631,11 +855,45 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 snapshotSeq = globalSeqId.get();
             }
 
-            String dimension = VersionCompat.level().getDimensionId(level);
-            CanonicalVoxelScanner.BaselineScanResult scan = CanonicalVoxelScanner.scanBaseline(
-                    level, selection, dimension,
-                    () -> !isStreamCurrent(conn, streamGen, selectionGen)
-            );
+            // Level/chunk access is server-thread-only. The scan is scheduled onto
+            // the Minecraft server executor; this worker waits for the immutable
+            // result and then serializes/sends it without touching Level again.
+            CompletableFuture<CanonicalVoxelScanner.BaselineScanResult> scanFuture = new CompletableFuture<>();
+            try {
+                ServerThread.execute(() -> {
+                    try {
+                        if (!isStreamCurrent(conn, streamGen, selectionGen)) {
+                            scanFuture.complete(null);
+                            return;
+                        }
+                        String dimension = VersionCompat.level().getDimensionId(level);
+                        scanFuture.complete(CanonicalVoxelScanner.scanBaseline(
+                                level, selection, dimension,
+                                () -> !isStreamCurrent(conn, streamGen, selectionGen)
+                        ));
+                    } catch (Throwable t) {
+                        scanFuture.completeExceptionally(t);
+                    }
+                });
+            } catch (Throwable t) {
+                scanFuture.completeExceptionally(t);
+            }
+
+            CanonicalVoxelScanner.BaselineScanResult scan;
+            try {
+                scan = scanFuture.get(120, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                streamGenerationOf(conn).incrementAndGet();
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
+                        "Selection scan exceeded 120 seconds; shrink the selection and retry"));
+                Yefira.LOGGER.warn("Baseline scan timed out for {}", conn.getRemoteSocketAddress());
+                return;
+            } catch (Exception e) {
+                Yefira.LOGGER.error("Baseline scan failed for " + conn.getRemoteSocketAddress(), e);
+                return;
+            }
             if (scan == null) {
                 Yefira.LOGGER.debug("Baseline scan for {} aborted (superseded)", conn.getRemoteSocketAddress());
                 return;
@@ -677,7 +935,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     (byte) 0, // uncompressed
                     (byte) scan.paletteBitsPerBlock,
                     (byte) scan.biomeBitsPerQuart,
-                    dimension,
+                    scan.dimension,
                     scan.blockPalette,
                     scan.biomePalette
             );
@@ -720,6 +978,25 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                         chunkPayload
                 );
                 if (!sendStreamFrame(conn, streamGen, selectionGen, chunkPkt)) return;
+
+                // Bounded backpressure: Java-WebSocket's outbound queue is
+                // unbounded. A client that stops reading must not be allowed to
+                // accumulate the whole baseline in memory.
+                long deadline = System.currentTimeMillis() + 5_000L;
+                while (conn.hasBufferedData() && System.currentTimeMillis() < deadline) {
+                    if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+                    Thread.sleep(10L);
+                }
+                if (conn.hasBufferedData()) {
+                    Yefira.LOGGER.warn("Dropping slow DCC client {}: outbound queue did not drain",
+                            conn.getRemoteSocketAddress());
+                    try {
+                        conn.close(1008, "Slow client");
+                    } catch (Exception ignored) {
+                    }
+                    cleanupClient(conn);
+                    return;
+                }
             }
 
             byte[] endPkt = BlockDataEncoder.encodeBaselineEnd(
@@ -740,7 +1017,26 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     public void tickValidationHeartbeat(long currentTick) {
-        // Heartbeats handled via native WebSocket ping/pong
+        // Purge connections that finished the WebSocket handshake but never sent
+        // HELLO, and keep the per-client maps bounded.
+        long now = System.currentTimeMillis();
+        for (WebSocket client : List.copyOf(pendingClients)) {
+            Long since = pendingSince.get(client);
+            if (!client.isOpen()) {
+                cleanupClient(client);
+                continue;
+            }
+            if (since == null || now - since > HANDSHAKE_TIMEOUT_MS) {
+                Yefira.LOGGER.warn("Closing DCC client {}: HELLO handshake timed out", client.getRemoteSocketAddress());
+                pendingClients.remove(client);
+                pendingSince.remove(client);
+                clientConfigs.remove(client);
+                try {
+                    client.close(1008, "Handshake timeout");
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     /**

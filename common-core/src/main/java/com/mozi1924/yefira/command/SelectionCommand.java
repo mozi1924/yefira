@@ -23,16 +23,22 @@ public class SelectionCommand {
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("yefira")
-            // 1. Selection Commands (Accessible to all players without cheats)
+            // 1. Selection Commands. Mutating the global selection is an
+            // administrative action: it controls which world data is streamed to
+            // every connected DCC client. Singleplayer still works because
+            // hasAdminPermission() returns true for the integrated server.
             .then(Commands.literal("pos1")
+                .requires(SelectionCommand::hasAdminPermission)
                 .executes(SelectionCommand::setPos1Current)
                 .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                    .executes(ctx -> setPos1Specific(ctx, BlockPosArgument.getLoadedBlockPos(ctx, "pos")))))
+                    .executes(ctx -> setPos1Specific(ctx, BlockPosArgument.getBlockPos(ctx, "pos")))))
             .then(Commands.literal("pos2")
+                .requires(SelectionCommand::hasAdminPermission)
                 .executes(SelectionCommand::setPos2Current)
                 .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                    .executes(ctx -> setPos2Specific(ctx, BlockPosArgument.getLoadedBlockPos(ctx, "pos")))))
+                    .executes(ctx -> setPos2Specific(ctx, BlockPosArgument.getBlockPos(ctx, "pos")))))
             .then(Commands.literal("box")
+                .requires(SelectionCommand::hasAdminPermission)
                 .then(Commands.literal("preset")
                     .executes(ctx -> setPresetBox(ctx, 16))
                     .then(Commands.argument("size", IntegerArgumentType.integer(1, 256))
@@ -40,11 +46,13 @@ public class SelectionCommand {
                 .then(Commands.argument("from", BlockPosArgument.blockPos())
                     .then(Commands.argument("to", BlockPosArgument.blockPos())
                         .executes(ctx -> setBox(ctx,
-                                BlockPosArgument.getLoadedBlockPos(ctx, "from"),
-                                BlockPosArgument.getLoadedBlockPos(ctx, "to"))))))
+                                BlockPosArgument.getBlockPos(ctx, "from"),
+                                BlockPosArgument.getBlockPos(ctx, "to"))))))
             .then(Commands.literal("clear")
+                .requires(SelectionCommand::hasAdminPermission)
                 .executes(SelectionCommand::clearSelection))
             .then(Commands.literal("refresh")
+                .requires(SelectionCommand::hasAdminPermission)
                 .executes(SelectionCommand::refreshSnapshot))
             .then(Commands.literal("status")
                 .executes(SelectionCommand::showStatus))
@@ -88,7 +96,11 @@ public class SelectionCommand {
                 .then(Commands.literal("max_side")
                     .executes(SelectionCommand::showConfigMaxSide)
                     .then(Commands.argument("side", IntegerArgumentType.integer(1))
-                        .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side"))))))
+                        .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side")))))
+                .then(Commands.literal("token")
+                    .executes(SelectionCommand::showConfigToken)
+                    .then(Commands.argument("token", StringArgumentType.greedyString())
+                        .executes(ctx -> setConfigToken(ctx, StringArgumentType.getString(ctx, "token"))))))
 
             // Direct shortcuts matching GUI fields
             .then(Commands.literal("host")
@@ -116,6 +128,11 @@ public class SelectionCommand {
                 .executes(SelectionCommand::showConfigMaxSide)
                 .then(Commands.argument("side", IntegerArgumentType.integer(1))
                     .executes(ctx -> setConfigMaxSide(ctx, IntegerArgumentType.getInteger(ctx, "side")))))
+            .then(Commands.literal("token")
+                .requires(SelectionCommand::hasAdminPermission)
+                .executes(SelectionCommand::showConfigToken)
+                .then(Commands.argument("token", StringArgumentType.greedyString())
+                    .executes(ctx -> setConfigToken(ctx, StringArgumentType.getString(ctx, "token")))))
         );
     }
 
@@ -264,8 +281,12 @@ public class SelectionCommand {
         if (server.isRunning()) {
             source.sendFailure(Component.translatable("yefira.command.server.already_running", server.getHost(), server.getPort()));
         } else {
-            server.startServer(cfg.getHost(), cfg.getPort());
-            source.sendSuccess(() -> Component.translatable("yefira.command.server.started", cfg.getHost(), cfg.getPort()), true);
+            boolean started = server.startServer(cfg.getHost(), cfg.getPort());
+            if (!started) {
+                source.sendFailure(Component.translatable("yefira.command.server.start_failed", cfg.getHost(), cfg.getPort()));
+            } else {
+                source.sendSuccess(() -> Component.translatable("yefira.command.server.started", cfg.getHost(), cfg.getPort()), true);
+            }
         }
         return 1;
     }
@@ -286,8 +307,12 @@ public class SelectionCommand {
         CommandSourceStack source = ctx.getSource();
         WebSocketServerManager server = WebSocketServerManager.getInstance();
         YefiraConfig cfg = YefiraConfig.getInstance();
-        server.restartServer(cfg.getHost(), cfg.getPort());
-        source.sendSuccess(() -> Component.translatable("yefira.command.server.restarted", cfg.getHost(), cfg.getPort()), true);
+        boolean started = server.restartServer(cfg.getHost(), cfg.getPort());
+        if (!started) {
+            source.sendFailure(Component.translatable("yefira.command.server.start_failed", cfg.getHost(), cfg.getPort()));
+        } else {
+            source.sendSuccess(() -> Component.translatable("yefira.command.server.restarted", cfg.getHost(), cfg.getPort()), true);
+        }
         return 1;
     }
 
@@ -373,6 +398,24 @@ public class SelectionCommand {
         cfg.setMaxVolumeSoftLimit(maxVolume);
         YefiraConfig.save();
         source.sendSuccess(() -> Component.translatable("yefira.command.config.max_volume.set", String.valueOf(maxVolume)), true);
+        return 1;
+    }
+
+    private static int showConfigToken(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.token.info",
+                String.valueOf(cfg.getAuthToken() != null && !cfg.getAuthToken().isEmpty())), false);
+        return 1;
+    }
+
+    private static int setConfigToken(CommandContext<CommandSourceStack> ctx, String token) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        cfg.setAuthToken(token);
+        YefiraConfig.save();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.token.set",
+                String.valueOf(cfg.getAuthToken() != null && !cfg.getAuthToken().isEmpty())), true);
         return 1;
     }
 

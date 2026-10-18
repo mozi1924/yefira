@@ -114,10 +114,20 @@ public class YefiraScreen extends Screen {
                     mc.player.connection.sendCommand("yefira server start");
                 }
             } else {
+                if (isMultiplayer()) {
+                    if (mc.player != null) {
+                        mc.player.sendSystemMessage(Component.translatable(
+                                "yefira.gui.mode.client.unavailable"));
+                    }
+                    return;
+                }
                 if (localServer.isRunning()) {
                     localServer.stopServer();
                 } else {
-                    localServer.startServer(cfg.getHost(), cfg.getPort());
+                    if (!localServer.startServer(cfg.getHost(), cfg.getPort()) && mc.player != null) {
+                        mc.player.sendSystemMessage(Component.translatable(
+                                "yefira.command.server.start_failed", cfg.getHost(), cfg.getPort()));
+                    }
                 }
                 updateButtonLabels();
             }
@@ -134,6 +144,13 @@ public class YefiraScreen extends Screen {
                     mc.player.connection.sendCommand("yefira server restart");
                 }
             } else {
+                if (isMultiplayer()) {
+                    if (mc.player != null) {
+                        mc.player.sendSystemMessage(Component.translatable(
+                                "yefira.gui.mode.client.unavailable"));
+                    }
+                    return;
+                }
                 localServer.restartServer(cfg.getHost(), cfg.getPort());
                 updateButtonLabels();
             }
