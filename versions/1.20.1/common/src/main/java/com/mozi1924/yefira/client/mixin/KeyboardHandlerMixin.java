@@ -17,7 +17,7 @@ public class KeyboardHandlerMixin {
 
     @Shadow @Final private Minecraft minecraft;
 
-    @Inject(method = "keyPress", at = @At("HEAD"), cancellable = true, require = 0)
+    @Inject(method = "keyPress", at = @At("HEAD"), cancellable = true)
     private void onKeyPress(long window, int key, int scancode, int action, int mods, CallbackInfo ci) {
         GhostModeManager ghost = GhostModeManager.getInstance();
         if (!ghost.isActive()) {

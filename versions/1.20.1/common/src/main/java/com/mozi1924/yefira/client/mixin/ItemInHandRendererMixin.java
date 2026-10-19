@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(ItemInHandRenderer.class)
 public class ItemInHandRendererMixin {
 
-    @Inject(method = "renderHandsWithItems", at = @At("HEAD"), cancellable = true, require = 0)
+    @Inject(method = "renderHandsWithItems", at = @At("HEAD"), cancellable = true)
     private void onRenderHandsWithItems(float partialTicks, com.mojang.blaze3d.vertex.PoseStack poseStack, net.minecraft.client.renderer.MultiBufferSource.BufferSource buffer, net.minecraft.client.player.LocalPlayer player, int combinedLight, CallbackInfo ci) {
         if (GhostModeManager.getInstance().isActive()) {
             ci.cancel();

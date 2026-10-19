@@ -56,6 +56,8 @@ public class WebSocketIntegrationTest {
         server.stopServer();
         YefiraConfig cfg = YefiraConfig.getInstance();
         String previous = cfg.getAuthToken();
+        boolean previousBypass = cfg.isAllowLoopbackWithoutToken();
+        cfg.setAllowLoopbackWithoutToken(false);
         cfg.setAuthToken("secret-token");
         java.util.concurrent.CompletableFuture<Boolean> closed = new java.util.concurrent.CompletableFuture<>();
         WebSocketClient client = null;
@@ -82,6 +84,7 @@ public class WebSocketIntegrationTest {
                 try { client.closeBlocking(); } catch (Exception ignored) { }
             }
             cfg.setAuthToken(previous);
+            cfg.setAllowLoopbackWithoutToken(previousBypass);
             server.stopServer();
         }
     }
@@ -92,6 +95,8 @@ public class WebSocketIntegrationTest {
         server.stopServer();
         YefiraConfig cfg = YefiraConfig.getInstance();
         String previous = cfg.getAuthToken();
+        boolean previousBypass = cfg.isAllowLoopbackWithoutToken();
+        cfg.setAllowLoopbackWithoutToken(false);
         cfg.setAuthToken("secret-token");
         WebSocketClient client = null;
         try {
@@ -114,6 +119,41 @@ public class WebSocketIntegrationTest {
                 try { client.closeBlocking(); } catch (Exception ignored) { }
             }
             cfg.setAuthToken(previous);
+            cfg.setAllowLoopbackWithoutToken(previousBypass);
+            server.stopServer();
+        }
+    }
+
+    @Test
+    public void testLoopbackTokenBypassAcceptsEmptyToken() throws Exception {
+        WebSocketServerManager server = WebSocketServerManager.getInstance();
+        server.stopServer();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        String previous = cfg.getAuthToken();
+        boolean previousBypass = cfg.isAllowLoopbackWithoutToken();
+        cfg.setAuthToken("secret-token");
+        cfg.setAllowLoopbackWithoutToken(true);
+        WebSocketClient client = null;
+        try {
+            Assertions.assertTrue(server.startServer(TEST_HOST, 18769));
+            client = new WebSocketClient(new URI("ws://" + TEST_HOST + ":18769")) {
+                @Override public void onOpen(ServerHandshake handshakedata) {
+                    send(helloBytes(""));
+                }
+                @Override public void onMessage(String message) { }
+                @Override public void onClose(int code, String reason, boolean remote) { }
+                @Override public void onError(Exception ex) { }
+            };
+            Assertions.assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            Thread.sleep(200);
+            Assertions.assertEquals(1, server.getConnectedCount(),
+                    "Loopback binds may opt out of token validation");
+        } finally {
+            if (client != null) {
+                try { client.closeBlocking(); } catch (Exception ignored) { }
+            }
+            cfg.setAuthToken(previous);
+            cfg.setAllowLoopbackWithoutToken(previousBypass);
             server.stopServer();
         }
     }

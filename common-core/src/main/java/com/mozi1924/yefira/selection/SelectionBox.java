@@ -8,6 +8,21 @@ public class SelectionBox {
     private final BlockPos min;
     private final BlockPos max;
 
+    /**
+     * Builds a cube-shaped preset anchored at {@code center} and extending
+     * upward. Odd sizes stay centered on the cursor (a size of 15 is really 15
+     * blocks, not 14), and size 1 yields a single block.
+     */
+    public static SelectionBox presetAbove(BlockPos center, int size) {
+        if (center == null || size < 1) {
+            throw new IllegalArgumentException("size must be >= 1");
+        }
+        int half = (size - 1) / 2;
+        BlockPos pos1 = center.offset(-half, 0, -half);
+        BlockPos pos2 = pos1.offset(size - 1, size - 1, size - 1);
+        return new SelectionBox(pos1, pos2);
+    }
+
     public SelectionBox(BlockPos pos1, BlockPos pos2) {
         this.pos1 = pos1;
         this.pos2 = pos2;

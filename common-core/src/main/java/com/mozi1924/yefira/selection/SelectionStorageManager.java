@@ -12,9 +12,15 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 
 import java.io.Reader;
-import java.io.Writer;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 
 public class SelectionStorageManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -74,9 +80,12 @@ public class SelectionStorageManager {
             return;
         }
 
+        Path target = path.toAbsolutePath();
+        Path parent = target.getParent();
+        Path temp = null;
         try {
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
+            if (parent != null) {
+                Files.createDirectories(parent);
             }
 
             JsonObject json = new JsonObject();
@@ -97,13 +106,37 @@ public class SelectionStorageManager {
                 json.addProperty("dimension", VersionCompat.level().getDimensionId(dimension));
             }
 
-            try (Writer writer = Files.newBufferedWriter(path)) {
-                GSON.toJson(json, writer);
+            byte[] bytes = GSON.toJson(json).getBytes(StandardCharsets.UTF_8);
+            // Write to a sibling temp file and atomically rename it. A crash
+            // mid-write must never truncate the previous selection to empty,
+            // which would make the next load silently fall back to no selection.
+            temp = Files.createTempFile(parent, "yefira-selection-", ".tmp");
+            try (FileChannel channel = FileChannel.open(
+                    temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer);
+                }
+                channel.force(true);
             }
+            try {
+                Files.move(temp, target,
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException | FileAlreadyExistsException e) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            temp = null;
 
             Yefira.LOGGER.info("Saved selection to {}", path);
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to save selection to path: {}", path, e);
+        } finally {
+            if (temp != null) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (Exception ignored) {
+                }
+            }
         }
     }
 

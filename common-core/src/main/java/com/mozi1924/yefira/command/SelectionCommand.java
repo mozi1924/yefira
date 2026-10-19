@@ -14,6 +14,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 
 public class SelectionCommand {
 
@@ -56,6 +57,15 @@ public class SelectionCommand {
                 .executes(SelectionCommand::refreshSnapshot))
             .then(Commands.literal("status")
                 .executes(SelectionCommand::showStatus))
+
+            // 1b. Ghost Mode body anchor. Any player may protect their own
+            // body while the client moves the camera; this is not an admin
+            // world mutation.
+            .then(Commands.literal("ghost")
+                .then(Commands.literal("on")
+                    .executes(SelectionCommand::ghostOn))
+                .then(Commands.literal("off")
+                    .executes(SelectionCommand::ghostOff)))
 
             // 2. GUI Command (Opens GUI in client/singleplayer)
             .then(Commands.literal("gui")
@@ -100,7 +110,11 @@ public class SelectionCommand {
                 .then(Commands.literal("token")
                     .executes(SelectionCommand::showConfigToken)
                     .then(Commands.argument("token", StringArgumentType.greedyString())
-                        .executes(ctx -> setConfigToken(ctx, StringArgumentType.getString(ctx, "token"))))))
+                        .executes(ctx -> setConfigToken(ctx, StringArgumentType.getString(ctx, "token")))))
+                .then(Commands.literal("loopback_auth")
+                    .executes(SelectionCommand::showConfigLoopbackAuth)
+                    .then(Commands.argument("enabled", BoolArgumentType.bool())
+                        .executes(ctx -> setConfigLoopbackAuth(ctx, BoolArgumentType.getBool(ctx, "enabled"))))))
 
             // Direct shortcuts matching GUI fields
             .then(Commands.literal("host")
@@ -133,6 +147,11 @@ public class SelectionCommand {
                 .executes(SelectionCommand::showConfigToken)
                 .then(Commands.argument("token", StringArgumentType.greedyString())
                     .executes(ctx -> setConfigToken(ctx, StringArgumentType.getString(ctx, "token")))))
+            .then(Commands.literal("loopback_auth")
+                .requires(SelectionCommand::hasAdminPermission)
+                .executes(SelectionCommand::showConfigLoopbackAuth)
+                .then(Commands.argument("enabled", BoolArgumentType.bool())
+                    .executes(ctx -> setConfigLoopbackAuth(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
         );
     }
 
@@ -198,10 +217,8 @@ public class SelectionCommand {
     private static int setPresetBox(CommandContext<CommandSourceStack> ctx, int size) {
         CommandSourceStack source = ctx.getSource();
         BlockPos center = BlockPos.containing(source.getPosition());
-        int half = size / 2;
-        BlockPos p1 = center.offset(-half, 0, -half);
-        BlockPos p2 = center.offset(half - 1, size - 1, half - 1);
-        return setBox(ctx, p1, p2);
+        SelectionBox preset = SelectionBox.presetAbove(center, size);
+        return setBox(ctx, preset.getPos1(), preset.getPos2());
     }
 
     private static int clearSelection(CommandContext<CommandSourceStack> ctx) {
@@ -214,12 +231,45 @@ public class SelectionCommand {
     private static int refreshSnapshot(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         SelectionManager mgr = SelectionManager.getInstance();
-        if (mgr.hasSelection() && mgr.getCurrentLevel() != null) {
-            WebSocketServerManager.getInstance().broadcastBaseline(mgr.getCurrentLevel(), mgr.getCurrentSelection());
-            source.sendSuccess(() -> Component.translatable("yefira.command.refresh.success"), true);
-        } else {
+        if (!mgr.hasSelection() || mgr.getCurrentLevel() == null) {
             source.sendFailure(Component.translatable("yefira.command.refresh.no_selection"));
+            return 0;
         }
+        WebSocketServerManager server = WebSocketServerManager.getInstance();
+        if (!server.isRunning()) {
+            source.sendFailure(Component.translatable("yefira.command.refresh.server_offline"));
+            return 0;
+        }
+        if (server.getConnectedCount() <= 0) {
+            source.sendFailure(Component.translatable("yefira.command.refresh.no_clients"));
+            return 0;
+        }
+        server.broadcastBaseline(mgr.getCurrentLevel(), mgr.getCurrentSelection());
+        source.sendSuccess(() -> Component.translatable("yefira.command.refresh.success"), true);
+        return 1;
+    }
+
+    private static int ghostOn(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.translatable("yefira.command.ghost.no_player"));
+            return 0;
+        }
+        com.mozi1924.yefira.network.GhostAnchorManager.enable(player);
+        source.sendSuccess(() -> Component.translatable("yefira.command.ghost.enabled"), false);
+        return 1;
+    }
+
+    private static int ghostOff(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.translatable("yefira.command.ghost.no_player"));
+            return 0;
+        }
+        boolean wasActive = com.mozi1924.yefira.network.GhostAnchorManager.disable(player);
+        Component message = Component.translatable(
+                wasActive ? "yefira.command.ghost.disabled" : "yefira.command.ghost.not_active");
+        source.sendSuccess(() -> message, false);
         return 1;
     }
 
@@ -333,7 +383,8 @@ public class SelectionCommand {
         YefiraConfig cfg = YefiraConfig.getInstance();
         source.sendSuccess(() -> Component.translatable("yefira.command.config.info",
                 cfg.getHost(), cfg.getPort(), String.valueOf(cfg.isAutoStartOnWorldLoad()),
-                String.valueOf(cfg.getMaxVolumeSoftLimit()), String.valueOf(cfg.getMaxSideSoftLimit())), false);
+                String.valueOf(cfg.getMaxVolumeSoftLimit()), String.valueOf(cfg.getMaxSideSoftLimit()),
+                String.valueOf(cfg.isAllowLoopbackWithoutToken())), false);
         return 1;
     }
 
@@ -416,6 +467,24 @@ public class SelectionCommand {
         YefiraConfig.save();
         source.sendSuccess(() -> Component.translatable("yefira.command.config.token.set",
                 String.valueOf(cfg.getAuthToken() != null && !cfg.getAuthToken().isEmpty())), true);
+        return 1;
+    }
+
+    private static int showConfigLoopbackAuth(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.loopback_auth.set",
+                String.valueOf(cfg.isAllowLoopbackWithoutToken())), false);
+        return 1;
+    }
+
+    private static int setConfigLoopbackAuth(CommandContext<CommandSourceStack> ctx, boolean enabled) {
+        CommandSourceStack source = ctx.getSource();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        cfg.setAllowLoopbackWithoutToken(enabled);
+        YefiraConfig.save();
+        source.sendSuccess(() -> Component.translatable("yefira.command.config.loopback_auth.set",
+                String.valueOf(enabled)), true);
         return 1;
     }
 

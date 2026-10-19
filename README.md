@@ -239,13 +239,13 @@ mc-sync-blender/
 
 | 快捷键 (默认) | 功能说明 | 适用场景 |
 | :--- | :--- | :--- |
-| <kbd>G</kbd> | 开启 / 关闭 **幽灵摄像机模式 (Ghost Mode)** | 全局 |
+| <kbd>G</kbd> | 开启 / 关闭 **幽灵摄像机模式 (Ghost Mode)**（服务端 Yefira 会锚定并保护玩家本体，生存模式可用） | 全局 |
 | <kbd>O</kbd> | 打开 **Yefira 设置与控制面板 GUI** | 幽灵模式下 (非幽灵模式可通过 `/yefira gui`) |
 | <kbd>鼠标中键拖拽</kbd> | 围绕轴心旋转视角 (Orbit) | 幽灵模式下 |
 | <kbd>Shift + 鼠标中键</kbd> | 视口平移 (Pan) | 幽灵模式下 |
 | <kbd>滚轮</kbd> / <kbd>Ctrl + 中键</kbd> | 视口平滑缩放 (Zoom) | 幽灵模式下 |
 | <kbd>鼠标左键拖拽</kbd> | 框选新区域 / 拖动坐标轴微调选区 | 幽灵模式下 |
-| <kbd>F</kbd> / <kbd>小键盘 .</kbd> | 视口居中聚焦至当前选区 (Focus Selection) | 幽灵模式下 |
+| <kbd>V</kbd> / <kbd>小键盘 .</kbd> | 视口居中聚焦至当前选区 (Focus Selection) | 幽灵模式下 |
 | <kbd>X</kbd> / <kbd>Delete</kbd> | 清空当前已选区域 | 幽灵模式下 |
 | <kbd>C</kbd> | 在光标/枢轴处快速生成 16×16×16 预设区域 | 幽灵模式下 |
 | <kbd>右键</kbd> / <kbd>ESC</kbd> | 取消当前正在拖拽的选区框选 | 幽灵模式下 |
@@ -264,6 +264,7 @@ mc-sync-blender/
 /yefira clear                               # 清空当前活动选区
 /yefira status                              # 查看当前选区最小/最大坐标、尺寸与总方块数
 /yefira refresh                             # 手动重新向 Blender 客户端广播全量快照
+/yefira ghost <on|off>                      # 为当前玩家启用/关闭幽灵模式本体保护（生存模式可用）
 /yefira gui                                 # 快速呼出 Yefira 设置与控制面板 GUI
 /yefira server <start|stop|restart|status>  # 控制/查看 WebSocket 服务运行状态
 /yefira config                              # 查看当前配置（Host、Port、AutoStart）
@@ -271,6 +272,7 @@ mc-sync-blender/
 /yefira config port [<port>]                # 查看或修改 WebSocket 端口 (1024-65535)
 /yefira config autostart [<true|false>]     # 查看或切换进服自动启动
 /yefira config token [<secret>]             # 设置非回环绑定所需的共享认证令牌
+/yefira config loopback_auth [<true|false>] # 回环绑定时是否允许免 Token（默认 false）
 ```
 
 ---
@@ -284,7 +286,8 @@ mc-sync-blender/
   "host": "127.0.0.1",
   "port": 8765,
   "autoStartOnWorldLoad": false,
-  "authToken": ""
+  "authToken": "",
+  "allowLoopbackWithoutToken": false
 }
 ```
 
@@ -292,6 +295,12 @@ mc-sync-blender/
 * `port`: WebSocket 端口（默认 `8765`，需与 Blender 插件设置一致）。
 * `autoStartOnWorldLoad`: 进入单人世界或服务器启动时是否自动启动 WebSocket 服务。
 * `authToken`: 非回环绑定所需的共享密钥；Blender 端需填写相同值。为空时仅允许 `127.0.0.1`。
+* `allowLoopbackWithoutToken`: 绑定回环地址时是否跳过 Token 校验（默认 `false`）。纯本地 Blender 连接可打开；非回环绑定始终强制 Token。
+
+### 本地导出模式 vs 远程服务端模式
+
+* **本地导出 (Local Export)**：WebSocket 跑在玩家客户端上，选区从客户端已加载区块扫描。即使服务器不提供存档，也能把服务器中的建筑导出到 Blender。仅覆盖客户端当前已加载的区块，大选区可能短暂卡顿。
+* **远程服务端 (Remote Server)**：DCC 连接专用服务器上的 Yefira WebSocket，选区由服务端权威扫描，适合团队/工作室实时协作。需要服务器安装模组；选区命令需要管理员权限。
 
 ---
 

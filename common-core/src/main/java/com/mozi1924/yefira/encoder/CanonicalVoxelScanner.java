@@ -12,6 +12,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Authoritative 3D continuous voxel and biome scanner.
@@ -20,6 +21,21 @@ import java.util.*;
  * - Hash: xxHash64 (seed = 0) authoritative fingerprint.
  */
 public class CanonicalVoxelScanner {
+
+    /**
+     * Hard upper bound for a single authoritative scan. The WebSocket manager
+     * also guards the scan future, but this deadline lives inside the scan loop
+     * so a flat/large selection aborts on the thread that is actually touching
+     * chunk data instead of pinning the server thread until the future expires.
+     */
+    public static final long DEFAULT_MAX_SCAN_MILLIS = 120_000L;
+
+    /** Thrown when a scan exceeds {@link #DEFAULT_MAX_SCAN_MILLIS}. */
+    public static final class ScanTimeoutException extends RuntimeException {
+        public ScanTimeoutException(String message) {
+            super(message);
+        }
+    }
 
     public static class BaselineScanResult {
         public final BlockPos minPos;
@@ -137,6 +153,28 @@ public class CanonicalVoxelScanner {
             String dimension,
             java.util.function.BooleanSupplier cancelled
     ) {
+        return scanBaseline(level, box, dimension, cancelled, DEFAULT_MAX_SCAN_MILLIS);
+    }
+
+    /**
+     * Cancellable, time-bounded scan variant.
+     *
+     * <p>Cancellation is polled per chunk-column span (never more than 16 blocks)
+     * and once per Z row, so even a flat selection such as 2048x8x2048 aborts
+     * promptly. Thread interruption is also honoured. When {@code maxDurationMillis}
+     * is positive, exceeding it throws {@link ScanTimeoutException}.</p>
+     */
+    public static BaselineScanResult scanBaseline(
+            Level level,
+            SelectionBox box,
+            String dimension,
+            java.util.function.BooleanSupplier cancelled,
+            long maxDurationMillis
+    ) {
+        long scanStartNanos = System.nanoTime();
+        long maxScanNanos = maxDurationMillis > 0
+                ? TimeUnit.MILLISECONDS.toNanos(maxDurationMillis)
+                : Long.MAX_VALUE;
         BlockPos min = box.getMin();
         int minX = min.getX();
         int minY = min.getY();
@@ -186,7 +224,7 @@ public class CanonicalVoxelScanner {
         LevelChunk[][] chunkGrid = new LevelChunk[chunksW][chunksD];
         for (int cz = minSecZ; cz <= maxSecZ; cz++) {
             for (int cx = minSecX; cx <= maxSecX; cx++) {
-                if (cancelled.getAsBoolean()) {
+                if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
                     return null;
                 }
                 try {
@@ -198,15 +236,16 @@ public class CanonicalVoxelScanner {
 
         // 2. Voxel Scan (Y bottom-up, Z next, X fastest)
         for (int y = minY; y < maxY; y++) {
-            // Cooperative cancellation: checked once per horizontal slice (16x16 blocks).
-            if (((y - minY) & 15) == 0 && cancelled.getAsBoolean()) {
-                return null;
-            }
             int secY = y >> 4;
             int sectionIdx = level.getSectionIndexFromSectionY(secY);
             int ly = y & 15;
 
             for (int z = minZ; z < maxZ; z++) {
+                // One check per Z row: flat selections never advance Y, so the
+                // old once-per-16-Y check could never fire for them.
+                if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
+                    return null;
+                }
                 int cz = (z >> 4) - minSecZ;
                 int lz = z & 15;
 
@@ -225,6 +264,12 @@ public class CanonicalVoxelScanner {
                     int nextBoundaryX = (x & ~15) + 16;
                     int nextX = Math.min(maxX, nextBoundaryX);
                     int span = nextX - x;
+
+                    // Poll per chunk-column span (<= 16 voxels) so a single wide
+                    // row cannot monopolise cancellation latency.
+                    if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
+                        return null;
+                    }
 
                     if (section == null || section.hasOnlyAir()) {
                         for (int i = 0; i < span; i++) {
@@ -275,7 +320,7 @@ public class CanonicalVoxelScanner {
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
         for (int qy = 0; qy < qh; qy++) {
-            if (cancelled.getAsBoolean()) {
+            if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
                 return null;
             }
             for (int qz = 0; qz < qd; qz++) {
@@ -319,11 +364,19 @@ public class CanonicalVoxelScanner {
 
         if (bitsPerBlock == 8) {
             for (int i = 0; i < totalVoxels; i++) {
+                if ((i & 0xFFFFF) == 0
+                        && checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
+                    return null;
+                }
                 payload[i] = (byte) voxelIndices[i];
             }
         } else {
             ByteBuffer buf = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
             for (int i = 0; i < totalVoxels; i++) {
+                if ((i & 0xFFFFF) == 0
+                        && checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
+                    return null;
+                }
                 buf.putShort((short) (voxelIndices[i] & 0xFFFF));
             }
         }
@@ -331,6 +384,10 @@ public class CanonicalVoxelScanner {
         if (hasMultipleBiomes) {
             int offset = voxelBytesLen;
             for (int i = 0; i < totalQuarts; i++) {
+                if ((i & 0xFFFFF) == 0
+                        && checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
+                    return null;
+                }
                 payload[offset + i] = (byte) biomeIndices[i];
             }
         }
@@ -347,5 +404,27 @@ public class CanonicalVoxelScanner {
                 biomeBits,
                 finalStateHash
         );
+    }
+
+    /**
+     * Returns {@code true} when the scan must abort because the caller cancelled
+     * it or the worker thread was interrupted. Throws when the wall-clock budget
+     * is exhausted so callers can distinguish a timeout from a superseded scan.
+     */
+    private static boolean checkAbort(
+            java.util.function.BooleanSupplier cancelled,
+            long scanStartNanos,
+            long maxScanNanos,
+            long maxDurationMillis
+    ) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+            return true;
+        }
+        if (maxScanNanos != Long.MAX_VALUE
+                && System.nanoTime() - scanStartNanos >= maxScanNanos) {
+            throw new ScanTimeoutException(
+                    "Canonical scan exceeded " + maxDurationMillis + " ms");
+        }
+        return false;
     }
 }

@@ -1,6 +1,7 @@
 package com.mozi1924.yefira.network;
 
 import com.mozi1924.yefira.Yefira;
+import com.mozi1924.yefira.compat.ClientThread;
 import com.mozi1924.yefira.compat.ServerThread;
 import com.mozi1924.yefira.compat.VersionCompat;
 import com.mozi1924.yefira.config.YefiraConfig;
@@ -58,8 +59,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private final AtomicLong globalSeqId = new AtomicLong(1);
 
     // RFC v3.1 Session State
-    private final byte[] serverUuidBytes = new byte[16];
-    private long epoch = 1;
+    private volatile byte[] serverUuidBytes = new byte[16];
+    private volatile long epoch = 1;
     private volatile long cachedStateHash = 0;
     private final Object paletteLock = new Object();
     private final Map<String, Integer> blockPaletteLookup = new HashMap<>();
@@ -104,6 +105,46 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private boolean pendingDeltaOverflow = false;
     private static final int MAX_PENDING_DELTA_CHANGES = 262_144;
     private static final int MAX_DELTA_BATCH_CHANGES = 16_384;
+
+    /**
+     * Grace period added to the scanner's own deadline before the waiting worker
+     * gives up. The scanner normally throws {@link CanonicalVoxelScanner.ScanTimeoutException}
+     * first, which lets us report a precise timeout to the client.
+     */
+    private static final long BASELINE_SCAN_TIMEOUT_SECONDS =
+            TimeUnit.MILLISECONDS.toSeconds(CanonicalVoxelScanner.DEFAULT_MAX_SCAN_MILLIS) + 10L;
+
+    /**
+     * Local export scans run on the render/client thread, so they get a much
+     * smaller budget than server scans. A local selection that needs longer
+     * than this should be split into smaller boxes.
+     */
+    private static final long CLIENT_SCAN_TIMEOUT_MILLIS = 30_000L;
+
+    /** Raised when a local export selection spans client chunks that are not loaded. */
+    private static final class MissingClientChunksException extends RuntimeException {
+        MissingClientChunksException(String message) {
+            super(message);
+        }
+    }
+
+    /** Immutable identity of the baseline currently being streamed to one client. */
+    private static final class BaselineToken {
+        final long epoch;
+        final byte[] snapshotUuid;
+        final long snapshotSeq;
+        final long streamGen;
+
+        BaselineToken(long epoch, byte[] snapshotUuid, long snapshotSeq, long streamGen) {
+            this.epoch = epoch;
+            this.snapshotUuid = snapshotUuid;
+            this.snapshotSeq = snapshotSeq;
+            this.streamGen = streamGen;
+        }
+    }
+
+    private final Map<WebSocket, BaselineToken> clientSnapshots = new ConcurrentHashMap<>();
+    private final Map<WebSocket, Long> clientStreamEpochs = new ConcurrentHashMap<>();
 
     private static java.util.concurrent.ExecutorService createStreamingExecutor() {
         // Bounded worker count: baseline scans allocate int[] voxel buffers, so an
@@ -241,6 +282,22 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         pendingSince.clear();
         clientStreamGenerations.clear();
         clientSendLocks.clear();
+        clientSnapshots.clear();
+        clientStreamEpochs.clear();
+
+        // A restart is a new authoritative session: rotate the epoch and world
+        // UUID so a fast reconnect cannot present state from the previous run.
+        synchronized (paletteLock) {
+            epoch++;
+            serverUuidBytes = new byte[16];
+            new Random().nextBytes(serverUuidBytes);
+            cachedStateHash = 0;
+            globalSeqId.set(1);
+            paletteRevision = 1;
+            blockPaletteList.clear();
+            blockPaletteLookup.clear();
+        }
+
         serverStarted = false;
         startLatch.countDown();
 
@@ -403,6 +460,8 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         clientConfigs.remove(conn);
         clientStreamGenerations.remove(conn);
         clientSendLocks.remove(conn);
+        clientSnapshots.remove(conn);
+        clientStreamEpochs.remove(conn);
     }
 
     /**
@@ -413,6 +472,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         if (gen != null) {
             gen.incrementAndGet();
         }
+        // Any snapshot still awaiting ACK belongs to the cancelled stream.
+        clientSnapshots.remove(conn);
+        clientStreamEpochs.remove(conn);
     }
 
     private AtomicLong streamGenerationOf(WebSocket conn) {
@@ -431,50 +493,80 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         if (conn == null || !conn.isOpen() || level == null || selection == null) {
             return;
         }
+        SelectionManager selectionManager = SelectionManager.getInstance();
         if (level.isClientSide()) {
-            // Never scan a ClientLevel: its chunks are partial/unloaded and reading
-            // them from a worker races the client tick. The selection must be
-            // applied on the server via the C2S selection packet.
-            Yefira.LOGGER.warn("Refusing to scan a client-side Level for {}; selection must be server-authoritative",
-                    conn.getRemoteSocketAddress());
+            // Local export mode: the selection intentionally comes from the
+            // client's loaded chunks so structures can be exported from a
+            // server that does not expose its save file. This is only allowed
+            // when the selection manager is in LOCAL_CLIENT mode, and the scan
+            // itself is scheduled on the client thread (never a worker).
+            if (!selectionManager.isLocalClientSelection()) {
+                Yefira.LOGGER.warn("Refusing client-side scan for {}: selection source is not local-client",
+                        conn.getRemoteSocketAddress());
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_INVALID_BOUNDS,
+                        "Client-side selection is disabled in server sync mode"));
+                return;
+            }
+            if (!ClientThread.isAvailable()) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_INVALID_BOUNDS,
+                        "Client is not ready to scan; join a world and retry"));
+                Yefira.LOGGER.warn("Refusing local scan for {}: client-thread executor is unavailable",
+                        conn.getRemoteSocketAddress());
+                return;
+            }
+        } else if (!ServerThread.isAvailable()) {
+            // Do not fall back to scanning on this streaming worker: Level
+            // access off the server thread is unsafe and can race the tick.
             sendSafe(conn, BlockDataEncoder.encodeError(
                     epoch,
                     BlockDataEncoder.ERROR_INVALID_BOUNDS,
-                    "Selection is not available on the server side"));
+                    "Server is not ready to scan; retry after the world finishes loading"));
+            Yefira.LOGGER.warn("Refusing to scan for {}: server-thread executor is unavailable",
+                    conn.getRemoteSocketAddress());
             return;
         }
         long streamGen = streamGenerationOf(conn).incrementAndGet();
         long selectionGen = selectionGeneration.get();
+        long streamEpoch = epoch;
+        // A new stream supersedes any snapshot that is still awaiting ACK.
+        clientSnapshots.remove(conn);
+        clientStreamEpochs.put(conn, streamEpoch);
         activeBaselineStreams.incrementAndGet();
         try {
             streamingExecutor.submit(() -> {
                 try {
-                    streamBaseline(conn, level, selection, streamGen, selectionGen);
+                    streamBaseline(conn, level, selection, streamGen, selectionGen, streamEpoch);
                 } finally {
                     activeBaselineStreams.decrementAndGet();
+                    clientStreamEpochs.remove(conn, streamEpoch);
                 }
             });
         } catch (Exception e) {
             activeBaselineStreams.decrementAndGet();
+            clientStreamEpochs.remove(conn, streamEpoch);
             Yefira.LOGGER.error("Failed to schedule baseline stream", e);
         }
     }
 
-    private boolean isStreamCurrent(WebSocket conn, long streamGen, long selectionGen) {
+    private boolean isStreamCurrent(WebSocket conn, long streamGen, long selectionGen, long streamEpoch) {
         if (conn == null || !conn.isOpen()) {
             return false;
         }
-        if (selectionGeneration.get() != selectionGen) {
+        if (epoch != streamEpoch || selectionGeneration.get() != selectionGen) {
             return false;
         }
         AtomicLong gen = clientStreamGenerations.get(conn);
         return gen != null && gen.get() == streamGen;
     }
 
-    private boolean sendStreamFrame(WebSocket conn, long streamGen, long selectionGen, byte[] data) {
+    private boolean sendStreamFrame(WebSocket conn, long streamGen, long selectionGen, long streamEpoch, byte[] data) {
         Object lock = sendLockOf(conn);
         synchronized (lock) {
-            if (!isStreamCurrent(conn, streamGen, selectionGen)) {
+            if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) {
                 return false;
             }
             return sendSafe(conn, data);
@@ -596,29 +688,94 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             }
 
             if (packetType == BlockDataEncoder.OPCODE_BASELINE_ACK) {
-                if (message.remaining() >= 1) {
-                    // epoch(8) + snapshot_uuid(16) + committed_seq(8) + result_code(1)
-                    if (message.remaining() >= 33) {
-                        message.position(message.position() + 32);
-                        byte resultCode = message.get();
-                        if (resultCode != 0) {
-                            Yefira.LOGGER.warn("Client {} rejected the baseline (result code {}); next RESYNC will stream a fresh snapshot",
-                                    conn.getRemoteSocketAddress(), resultCode);
-                        } else {
-                            Yefira.LOGGER.info("Client {} committed baseline snapshot", conn.getRemoteSocketAddress());
-                        }
-                    } else {
-                        Yefira.LOGGER.info("Client {} acknowledged baseline commit", conn.getRemoteSocketAddress());
-                    }
+                // epoch(8) + snapshot_uuid(16) + committed_seq(8) + result_code(1)
+                if (message.remaining() < 33) {
+                    Yefira.LOGGER.warn("Ignoring malformed BASELINE_ACK from {} ({} payload bytes)",
+                            conn.getRemoteSocketAddress(), message.remaining());
+                    return;
+                }
+                long ackEpoch = message.getLong();
+                byte[] ackUuid = new byte[16];
+                message.get(ackUuid);
+                long committedSeq = message.getLong();
+                byte resultCode = message.get();
+
+                BaselineToken token = clientSnapshots.get(conn);
+                if (token == null) {
+                    Yefira.LOGGER.warn("Ignoring stale BASELINE_ACK from {}: no snapshot is awaiting commit",
+                            conn.getRemoteSocketAddress());
+                    return;
+                }
+                if (ackEpoch != epoch || ackEpoch != token.epoch
+                        || !Arrays.equals(ackUuid, token.snapshotUuid)
+                        || committedSeq != token.snapshotSeq) {
+                    Yefira.LOGGER.warn(
+                            "Ignoring stale BASELINE_ACK from {}: epoch={}, seq={} (current epoch={}, expected seq={})",
+                            conn.getRemoteSocketAddress(), ackEpoch, committedSeq, epoch, token.snapshotSeq);
+                    return;
+                }
+
+                clientSnapshots.remove(conn, token);
+                if (resultCode != 0) {
+                    Yefira.LOGGER.warn("Client {} rejected the baseline (result code {}); next RESYNC will stream a fresh snapshot",
+                            conn.getRemoteSocketAddress(), resultCode);
+                } else {
+                    Yefira.LOGGER.info("Client {} committed baseline snapshot", conn.getRemoteSocketAddress());
                 }
                 return;
             }
 
             if (packetType == BlockDataEncoder.OPCODE_CANCEL) {
                 // The DCC client aborted the current baseline (e.g. selection too large).
-                // Stop streaming immediately instead of pushing the rest of the snapshot.
+                // Only cancel when the packet belongs to the current epoch/snapshot;
+                // otherwise a delayed CANCEL from an old session could kill a fresh stream.
+                if (message.remaining() < 25) {
+                    Yefira.LOGGER.warn("Ignoring malformed CANCEL from {} ({} payload bytes)",
+                            conn.getRemoteSocketAddress(), message.remaining());
+                    return;
+                }
+                long cancelEpoch = message.getLong();
+                byte[] cancelUuid = new byte[16];
+                message.get(cancelUuid);
+                byte reason = message.get();
+
+                if (cancelEpoch != epoch) {
+                    Yefira.LOGGER.debug("Ignoring stale CANCEL from {}: packet epoch={}, current epoch={}",
+                            conn.getRemoteSocketAddress(), cancelEpoch, epoch);
+                    return;
+                }
+
+                BaselineToken token = clientSnapshots.get(conn);
+                boolean zeroUuid = true;
+                for (byte b : cancelUuid) {
+                    if (b != 0) {
+                        zeroUuid = false;
+                        break;
+                    }
+                }
+                if (zeroUuid) {
+                    // A zero UUID means "cancel whatever is running for this
+                    // connection", which covers a scan that has not produced its
+                    // snapshot UUID yet.
+                    Long activeEpoch = clientStreamEpochs.get(conn);
+                    if (activeEpoch == null || activeEpoch != epoch) {
+                        Yefira.LOGGER.debug("Ignoring CANCEL from {}: no active baseline stream",
+                                conn.getRemoteSocketAddress());
+                        return;
+                    }
+                } else if (token == null
+                        || token.epoch != epoch
+                        || !Arrays.equals(cancelUuid, token.snapshotUuid)) {
+                    Yefira.LOGGER.warn("Ignoring stale CANCEL from {}: snapshot UUID does not match the active baseline",
+                            conn.getRemoteSocketAddress());
+                    return;
+                }
+
                 cancelClientStream(conn);
-                Yefira.LOGGER.info("Client {} cancelled the baseline stream", conn.getRemoteSocketAddress());
+                clientSnapshots.remove(conn);
+                clientStreamEpochs.remove(conn);
+                Yefira.LOGGER.info("Client {} cancelled the baseline stream (reason {})",
+                        conn.getRemoteSocketAddress(), reason);
                 return;
             }
 
@@ -658,7 +815,13 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     private boolean isAuthorized(WebSocket conn, BlockDataEncoder.HelloPacket hello) {
-        String expected = YefiraConfig.getInstance().getAuthToken();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        // Explicit opt-in: a loopback bind is only reachable from this machine,
+        // so a purely local Blender connection may skip token entry.
+        if (isLoopbackHost(HOST) && cfg.isAllowLoopbackWithoutToken()) {
+            return true;
+        }
+        String expected = cfg.getAuthToken();
         if (expected == null || expected.isEmpty()) {
             // No token configured: loopback-only binding is enforced by startServer.
             return true;
@@ -673,10 +836,11 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     private void sendWelcomeRejected(WebSocket conn, String reason) {
+        long currentEpoch = epoch;
         byte[] welcome = BlockDataEncoder.encodeWelcome(
                 (short) 3,
                 serverUuidBytes,
-                epoch,
+                currentEpoch,
                 globalSeqId.get(),
                 null,
                 0, 0, 0,
@@ -704,13 +868,19 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
         activateClient(conn);
 
+        // Capture the session identity once so a concurrent restart cannot make
+        // two reads in this handshake observe different epochs/UUIDs.
+        long currentEpoch = epoch;
+        byte[] currentUuid = serverUuidBytes;
+        long currentSeq = globalSeqId.get();
+
         SelectionManager sm = SelectionManager.getInstance();
         if (!sm.hasSelection() || sm.getCurrentLevel() == null) {
             byte[] welcome = BlockDataEncoder.encodeWelcome(
                     (short) 3,
-                    serverUuidBytes,
-                    epoch,
-                    globalSeqId.get(),
+                    currentUuid,
+                    currentEpoch,
+                    currentSeq,
                     null,
                     0, 0, 0,
                     0,
@@ -726,9 +896,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         String dimension = VersionCompat.level().getDimensionId(level);
 
         boolean hasClientCache = (hello.cachedStateHash != 0) && !Arrays.equals(hello.cachedWorldUuid, new byte[16]);
-        boolean matchesUuid = Arrays.equals(hello.cachedWorldUuid, serverUuidBytes);
-        boolean matchesEpoch = hello.cachedEpoch == epoch;
-        boolean matchesSeq = hello.cachedSeq == globalSeqId.get();
+        boolean matchesUuid = Arrays.equals(hello.cachedWorldUuid, currentUuid);
+        boolean matchesEpoch = hello.cachedEpoch == currentEpoch;
+        boolean matchesSeq = hello.cachedSeq == currentSeq;
         boolean matchesBounds = (hello.cachedMinX == selection.getMin().getX())
                 && (hello.cachedMinY == selection.getMin().getY())
                 && (hello.cachedMinZ == selection.getMin().getZ())
@@ -744,9 +914,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             Yefira.LOGGER.info("Client {} verified 100% in sync with scene! Sending VERIFIED_SKIP_REBUILD.", conn.getRemoteSocketAddress());
             byte[] welcome = BlockDataEncoder.encodeWelcome(
                     (short) 3,
-                    serverUuidBytes,
-                    epoch,
-                    globalSeqId.get(),
+                    currentUuid,
+                    currentEpoch,
+                    currentSeq,
                     selection.getMin(),
                     selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
                     cachedStateHash,
@@ -758,9 +928,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             Yefira.LOGGER.info("Client {} cache mismatch or initial connect -> sending FULL_BASELINE_REQUIRED.", conn.getRemoteSocketAddress());
             byte[] welcome = BlockDataEncoder.encodeWelcome(
                     (short) 3,
-                    serverUuidBytes,
-                    epoch,
-                    globalSeqId.get(),
+                    currentUuid,
+                    currentEpoch,
+                    currentSeq,
                     selection.getMin(),
                     selection.getSizeX(), selection.getSizeY(), selection.getSizeZ(),
                     cachedStateHash,
@@ -812,9 +982,9 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     }
 
     private void streamBaseline(WebSocket conn, Level level, SelectionBox selection,
-                                long streamGen, long selectionGen) {
+                                long streamGen, long selectionGen, long streamEpoch) {
         try {
-            if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+            if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) return;
 
             // Hard protocol guard: never scan/allocate a selection that the DCC
             // client will reject, and never OOM the Minecraft process on a runaway box.
@@ -855,40 +1025,77 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 snapshotSeq = globalSeqId.get();
             }
 
-            // Level/chunk access is server-thread-only. The scan is scheduled onto
-            // the Minecraft server executor; this worker waits for the immutable
-            // result and then serializes/sends it without touching Level again.
+            // Level/chunk access is owner-thread-only: ServerLevel on the server
+            // thread, ClientLevel on the client thread. This worker waits for the
+            // immutable result and then serializes/sends it without touching Level.
+            boolean clientLevel = level.isClientSide();
+            long scanTimeoutMillis = clientLevel
+                    ? CLIENT_SCAN_TIMEOUT_MILLIS
+                    : CanonicalVoxelScanner.DEFAULT_MAX_SCAN_MILLIS;
             CompletableFuture<CanonicalVoxelScanner.BaselineScanResult> scanFuture = new CompletableFuture<>();
-            try {
-                ServerThread.execute(() -> {
-                    try {
-                        if (!isStreamCurrent(conn, streamGen, selectionGen)) {
-                            scanFuture.complete(null);
-                            return;
-                        }
-                        String dimension = VersionCompat.level().getDimensionId(level);
-                        scanFuture.complete(CanonicalVoxelScanner.scanBaseline(
-                                level, selection, dimension,
-                                () -> !isStreamCurrent(conn, streamGen, selectionGen)
-                        ));
-                    } catch (Throwable t) {
-                        scanFuture.completeExceptionally(t);
+            Runnable scanTask = () -> {
+                try {
+                    if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) {
+                        scanFuture.complete(null);
+                        return;
                     }
-                });
+                    if (clientLevel && !hasLoadedClientChunks(level, selection)) {
+                        scanFuture.completeExceptionally(new MissingClientChunksException(
+                                "Local export selection includes chunks that are not loaded on this client; "
+                                        + "move closer or shrink the selection"));
+                        return;
+                    }
+                    String dimension = VersionCompat.level().getDimensionId(level);
+                    scanFuture.complete(CanonicalVoxelScanner.scanBaseline(
+                            level, selection, dimension,
+                            () -> !isStreamCurrent(conn, streamGen, selectionGen, streamEpoch),
+                            scanTimeoutMillis
+                    ));
+                } catch (Throwable t) {
+                    scanFuture.completeExceptionally(t);
+                }
+            };
+            try {
+                if (clientLevel) {
+                    ClientThread.executeChecked(scanTask);
+                } else {
+                    ServerThread.executeChecked(scanTask);
+                }
             } catch (Throwable t) {
                 scanFuture.completeExceptionally(t);
             }
 
             CanonicalVoxelScanner.BaselineScanResult scan;
             try {
-                scan = scanFuture.get(120, TimeUnit.SECONDS);
+                scan = scanFuture.get(BASELINE_SCAN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException e) {
                 streamGenerationOf(conn).incrementAndGet();
                 sendSafe(conn, BlockDataEncoder.encodeError(
                         epoch,
                         BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
-                        "Selection scan exceeded 120 seconds; shrink the selection and retry"));
+                        "Selection scan exceeded the time limit; shrink the selection and retry"));
                 Yefira.LOGGER.warn("Baseline scan timed out for {}", conn.getRemoteSocketAddress());
+                return;
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof MissingClientChunksException) {
+                    streamGenerationOf(conn).incrementAndGet();
+                    sendSafe(conn, BlockDataEncoder.encodeError(
+                            epoch,
+                            BlockDataEncoder.ERROR_INVALID_BOUNDS,
+                            cause.getMessage()));
+                    Yefira.LOGGER.warn("Local export selection for {} spans unloaded chunks",
+                            conn.getRemoteSocketAddress());
+                } else if (cause instanceof CanonicalVoxelScanner.ScanTimeoutException) {
+                    streamGenerationOf(conn).incrementAndGet();
+                    sendSafe(conn, BlockDataEncoder.encodeError(
+                            epoch,
+                            BlockDataEncoder.ERROR_RESOURCE_LIMIT_EXCEEDED,
+                            "Selection scan exceeded the time limit; shrink the selection and retry"));
+                    Yefira.LOGGER.warn("Baseline scan watchdog fired for {}", conn.getRemoteSocketAddress());
+                } else {
+                    Yefira.LOGGER.error("Baseline scan failed for " + conn.getRemoteSocketAddress(), cause);
+                }
                 return;
             } catch (Exception e) {
                 Yefira.LOGGER.error("Baseline scan failed for " + conn.getRemoteSocketAddress(), e);
@@ -898,7 +1105,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 Yefira.LOGGER.debug("Baseline scan for {} aborted (superseded)", conn.getRemoteSocketAddress());
                 return;
             }
-            if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+            if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) return;
 
             cachedStateHash = scan.stateHash;
 
@@ -915,6 +1122,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
             byte[] snapshotUuid = new byte[16];
             new Random().nextBytes(snapshotUuid);
+            clientSnapshots.put(conn, new BaselineToken(streamEpoch, snapshotUuid, snapshotSeq, streamGen));
 
             byte[] payload = scan.payload;
             int totalBytes = payload.length;
@@ -939,7 +1147,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     scan.blockPalette,
                     scan.biomePalette
             );
-            if (!sendStreamFrame(conn, streamGen, selectionGen, beginPkt)) return;
+            if (!sendStreamFrame(conn, streamGen, selectionGen, streamEpoch, beginPkt)) return;
 
             int bytesPerVoxel = Math.max(1, scan.paletteBitsPerBlock / 8);
             int voxelsPerChunk = chunkSize / bytesPerVoxel;
@@ -948,7 +1156,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 if (Thread.currentThread().isInterrupted()) {
                     return;
                 }
-                if (!isStreamCurrent(conn, streamGen, selectionGen)) {
+                if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) {
                     return;
                 }
                 int offset = chunkIdx * chunkSize;
@@ -977,14 +1185,14 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                         chunkHash,
                         chunkPayload
                 );
-                if (!sendStreamFrame(conn, streamGen, selectionGen, chunkPkt)) return;
+                if (!sendStreamFrame(conn, streamGen, selectionGen, streamEpoch, chunkPkt)) return;
 
                 // Bounded backpressure: Java-WebSocket's outbound queue is
                 // unbounded. A client that stops reading must not be allowed to
                 // accumulate the whole baseline in memory.
                 long deadline = System.currentTimeMillis() + 5_000L;
                 while (conn.hasBufferedData() && System.currentTimeMillis() < deadline) {
-                    if (!isStreamCurrent(conn, streamGen, selectionGen)) return;
+                    if (!isStreamCurrent(conn, streamGen, selectionGen, streamEpoch)) return;
                     Thread.sleep(10L);
                 }
                 if (conn.hasBufferedData()) {
@@ -1007,13 +1215,36 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     scan.stateHash,
                     (byte) 0
             );
-            if (sendStreamFrame(conn, streamGen, selectionGen, endPkt)) {
+            if (sendStreamFrame(conn, streamGen, selectionGen, streamEpoch, endPkt)) {
                 Yefira.LOGGER.info("Baseline streamed to client {} ({} bytes, {} chunks, hash=0x{})",
                         conn.getRemoteSocketAddress(), totalBytes, totalChunks, Long.toHexString(scan.stateHash));
             }
         } catch (Exception e) {
             Yefira.LOGGER.error("Failed to stream baseline to client {}", conn.getRemoteSocketAddress(), e);
         }
+    }
+
+    /**
+     * Checks that every chunk column touched by a local export selection is
+     * currently loaded on the client. Runs on the client thread only.
+     */
+    private static boolean hasLoadedClientChunks(Level level, SelectionBox selection) {
+        int minX = selection.getMin().getX();
+        int minZ = selection.getMin().getZ();
+        int maxX = selection.getMax().getX();
+        int maxZ = selection.getMax().getZ();
+        int minCx = minX >> 4;
+        int maxCx = maxX >> 4;
+        int minCz = minZ >> 4;
+        int maxCz = maxZ >> 4;
+        for (int cz = minCz; cz <= maxCz; cz++) {
+            for (int cx = minCx; cx <= maxCx; cx++) {
+                if (!level.getChunkSource().hasChunk(cx, cz)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     public void tickValidationHeartbeat(long currentTick) {

@@ -40,4 +40,16 @@ public final class ServerThread {
             task.run();
         }
     }
+
+    /**
+     * Strict variant for code that must never run on the calling thread
+     * (e.g. Level/chunk access). Throws instead of falling back.
+     */
+    public static void executeChecked(Runnable task) {
+        Executor current = executor;
+        if (current == null) {
+            throw new IllegalStateException("server executor is not registered");
+        }
+        current.execute(task);
+    }
 }

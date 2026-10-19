@@ -28,6 +28,29 @@ public class SelectionMathTest {
     }
 
     @Test
+    public void testPresetBoxKeepsRequestedSize() {
+        BlockPos center = new BlockPos(0, 64, 0);
+
+        SelectionBox odd = SelectionBox.presetAbove(center, 15);
+        Assertions.assertEquals(15, odd.getSizeX());
+        Assertions.assertEquals(15, odd.getSizeY());
+        Assertions.assertEquals(15, odd.getSizeZ());
+        Assertions.assertTrue(odd.contains(center));
+
+        SelectionBox even = SelectionBox.presetAbove(center, 16);
+        Assertions.assertEquals(16, even.getSizeX());
+        Assertions.assertEquals(16, even.getSizeY());
+        Assertions.assertEquals(16, even.getSizeZ());
+
+        SelectionBox single = SelectionBox.presetAbove(center, 1);
+        Assertions.assertEquals(1, single.getSizeX());
+        Assertions.assertEquals(1, single.getSizeY());
+        Assertions.assertEquals(1, single.getSizeZ());
+        Assertions.assertEquals(center, single.getMin());
+        Assertions.assertEquals(center, single.getMax());
+    }
+
+    @Test
     public void testSelectionBoxOversized() {
         // Small box (16x16x16 = 4096 blocks) -> not oversized with default limits
         SelectionBox small = new SelectionBox(new BlockPos(0, 0, 0), new BlockPos(15, 15, 15));

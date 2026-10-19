@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Minecraft.class)
 public class MinecraftMixin {
 
-    @Inject(method = "handleKeybinds", at = @At("HEAD"), cancellable = true, require = 0)
+    @Inject(method = "handleKeybinds", at = @At("HEAD"), cancellable = true)
     private void onHandleKeybinds(CallbackInfo ci) {
         if (GhostModeManager.getInstance().isActive()) {
             ci.cancel();

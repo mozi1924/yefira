@@ -2,6 +2,7 @@ package com.mozi1924.yefira;
 
 import com.mozi1924.yefira.compat.ServerThread;
 import com.mozi1924.yefira.config.YefiraConfig;
+import com.mozi1924.yefira.network.GhostAnchorManager;
 import com.mozi1924.yefira.network.WebSocketServerManager;
 import com.mozi1924.yefira.selection.SelectionManager;
 import com.mozi1924.yefira.selection.SelectionStorageManager;
@@ -31,6 +32,7 @@ public class Yefira {
     public static void onServerTick(MinecraftServer server) {
         WebSocketServerManager.getInstance().flushQueuedDeltaUpdates();
         WebSocketServerManager.getInstance().tickValidationHeartbeat(server.getTickCount());
+        GhostAnchorManager.tick(server);
     }
 
     /**
@@ -71,6 +73,7 @@ public class Yefira {
      */
     public static void onServerStopping(MinecraftServer server) {
         ServerThread.clear();
+        GhostAnchorManager.clearAll();
         WebSocketServerManager.getInstance().stopServer();
         SelectionManager.getInstance().resetOnWorldUnload();
     }

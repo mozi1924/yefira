@@ -5,6 +5,7 @@ import com.mozi1924.yefira.Yefira;
 import com.mozi1924.yefira.client.compat.KeyMappingCompat;
 import com.mozi1924.yefira.client.ghost.GhostModeManager;
 import com.mozi1924.yefira.client.gui.YefiraScreen;
+import com.mozi1924.yefira.compat.ClientThread;
 import com.mozi1924.yefira.config.YefiraConfig;
 import com.mozi1924.yefira.network.WebSocketServerManager;
 import com.mozi1924.yefira.selection.SelectionManager;
@@ -48,7 +49,7 @@ public class YefiraClient {
         keyFocus = KeyMappingCompat.createKeyMapping(
             "key.yefira.focus",
             InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_F,
+            GLFW.GLFW_KEY_V,
             YEFIRA_CATEGORY
         );
 
@@ -68,7 +69,13 @@ public class YefiraClient {
     }
 
     public static void onClientJoinServer(Minecraft client) {
-        if (!client.hasSingleplayerServer()) {
+        // Local export mode scans ClientLevel chunks on the client thread.
+        ClientThread.setExecutor(client::execute);
+        boolean multi = !client.hasSingleplayerServer();
+        SelectionManager.getInstance().setSelectionSource(multi
+                ? SelectionManager.SelectionSource.LOCAL_CLIENT
+                : SelectionManager.SelectionSource.SERVER_AUTHORITATIVE);
+        if (multi) {
             ServerData serverData = client.getCurrentServer();
             if (serverData != null && serverData.ip != null) {
                 Path serverPath = SelectionStorageManager.getServerStoragePath(serverData.ip);
@@ -77,12 +84,12 @@ public class YefiraClient {
                     Yefira.LOGGER.info("Loaded server selection for IP: {}", serverData.ip);
                 }
             }
-            // Remote multiplayer: the authoritative selection/world lives on the
-            // dedicated server. Never open a local unauthenticated server here;
-            // the DCC must connect to the server's Yefira endpoint (if installed).
+            // Remote multiplayer: local WebSocket auto-start stays disabled, but
+            // the user can start it manually from the GUI to export the loaded
+            // client-side chunks without server save access.
             Yefira.LOGGER.info(
-                "Remote server detected; local WebSocket server auto-start is disabled. "
-                    + "Connect the DCC to the server's Yefira endpoint.");
+                "Remote server detected; local WebSocket auto-start is disabled. "
+                    + "Start it from the GUI for local export, or connect the DCC to the server's endpoint.");
         }
     }
 
@@ -90,6 +97,8 @@ public class YefiraClient {
         if (GhostModeManager.getInstance().isActive()) {
             GhostModeManager.getInstance().disable();
         }
+        ClientThread.clear();
+        SelectionManager.getInstance().setSelectionSource(SelectionManager.SelectionSource.SERVER_AUTHORITATIVE);
         if (!client.hasSingleplayerServer()) {
             SelectionManager.getInstance().clearSelection();
             WebSocketServerManager.getInstance().stopServer();

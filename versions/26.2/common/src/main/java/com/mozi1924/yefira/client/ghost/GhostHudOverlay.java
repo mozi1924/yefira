@@ -33,12 +33,24 @@ public class GhostHudOverlay {
         Component hintsComp = Component.translatable("yefira.hud.hints.ghost");
         graphics.centeredText(font, hintsComp, screenWidth / 2, 6, 0xFFE0E0E0);
 
-        // Server Status & Fly Speed (top right)
-        WebSocketServerManager ws = WebSocketServerManager.getInstance();
-        Component serverStatusComp = ws.isRunning()
-            ? Component.translatable("yefira.hud.server.running", ws.getConnectedCount())
-            : Component.translatable("yefira.hud.server.stopped");
-        int statusColor = ws.isRunning() ? 0x55FF55 : 0xFF7777;
+        // Server Status & Fly Speed (top right). In multiplayer the DCC talks to
+        // the remote server, so the local server's state is irrelevant/misleading.
+        boolean multi = mc.player != null && !mc.hasSingleplayerServer();
+        boolean remoteServer = multi
+                && SelectionManager.getInstance().getSelectionSource()
+                    == SelectionManager.SelectionSource.SERVER_AUTHORITATIVE;
+        Component serverStatusComp;
+        int statusColor;
+        if (remoteServer) {
+            serverStatusComp = Component.translatable("yefira.hud.server.remote");
+            statusColor = 0x55FFFF;
+        } else {
+            WebSocketServerManager ws = WebSocketServerManager.getInstance();
+            serverStatusComp = ws.isRunning()
+                ? Component.translatable("yefira.hud.server.running", ws.getConnectedCount())
+                : Component.translatable("yefira.hud.server.stopped");
+            statusColor = ws.isRunning() ? 0x55FF55 : 0xFF7777;
+        }
         int statusWidth = font.width(serverStatusComp);
         graphics.text(font, serverStatusComp, screenWidth - statusWidth - 8, 6, statusColor, true);
 

@@ -22,7 +22,7 @@ public abstract class CameraMixin {
     @Shadow protected abstract void setRotation(float yRot, float xRot);
     @Shadow protected abstract void setPosition(Vec3 pos);
 
-    @Inject(method = "setup", at = @At("HEAD"), cancellable = true, require = 0)
+    @Inject(method = "setup", at = @At("HEAD"), cancellable = true)
     private void onSetup(BlockGetter level, Entity entity, boolean detached, boolean thirdPersonReverse, float partialTickTime, CallbackInfo ci) {
         GhostModeManager ghost = GhostModeManager.getInstance();
         if (ghost.isActive()) {

@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(KeyboardInput.class)
 public class ClientInputMixin {
 
-    @Inject(method = "tick", at = @At("TAIL"), require = 0)
+    @Inject(method = "tick", at = @At("TAIL"))
     private void onTick(boolean slowDown, float movementMultiplier, CallbackInfo ci) {
         if (GhostModeManager.getInstance().isActive()) {
             KeyboardInput input = (KeyboardInput) (Object) this;

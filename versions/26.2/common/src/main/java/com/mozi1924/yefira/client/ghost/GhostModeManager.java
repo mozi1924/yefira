@@ -7,7 +7,10 @@ import com.mozi1924.yefira.selection.SelectionManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import org.lwjgl.glfw.GLFW;
@@ -101,8 +104,22 @@ public class GhostModeManager {
         }
         if (mc.player == null || mc.level == null) return;
 
-        this.active = true;
         Player player = mc.player;
+        // The server-side Yefira mod anchors and protects the body (survival
+        // included). If the server does not have Yefira installed this command
+        // fails in chat, but the camera itself still works.
+        if (mc.player.connection != null) {
+            try {
+                mc.player.connection.sendCommand("yefira ghost on");
+            } catch (Exception e) {
+                Yefira.LOGGER.debug("Failed to request ghost anchor: {}", e.getMessage());
+            }
+        }
+        if (!mc.hasSingleplayerServer() && !player.isCreative() && !player.isSpectator()) {
+            player.sendSystemMessage(Component.translatable("yefira.ghost.anchor_hint"));
+        }
+
+        this.active = true;
         this.cameraPos = player.getEyePosition();
         this.yaw = player.getYRot();
         this.pitch = player.getXRot();
@@ -147,8 +164,20 @@ public class GhostModeManager {
         this.boxCreateStartPos = null;
         this.boxCreateCurrentPos = null;
 
-        // Regrab mouse
-        mc.mouseHandler.grabMouse();
+        if (mc.player != null && mc.player.connection != null) {
+            try {
+                mc.player.connection.sendCommand("yefira ghost off");
+            } catch (Exception e) {
+                Yefira.LOGGER.debug("Failed to release ghost anchor: {}", e.getMessage());
+            }
+        }
+
+        // Only recapture the cursor when no screen is open. On disconnect the
+        // disconnect screen is already visible, and grabbing the mouse there
+        // steals it from the UI.
+        if (mc.gui == null || mc.gui.screen() == null) {
+            mc.mouseHandler.grabMouse();
+        }
         Yefira.LOGGER.info("Ghost Mode DISABLED");
     }
 
@@ -265,6 +294,10 @@ public class GhostModeManager {
     public void tickMovement() {
         if (!active) return;
         Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            disable();
+            return;
+        }
         if (mc.gui != null && mc.gui.screen() != null) return;
 
         if (mc.mouseHandler.isMouseGrabbed()) {
@@ -396,7 +429,7 @@ public class GhostModeManager {
                 }
                 if (isBoxCreating) {
                     if (boxCreateStartPos != null && boxCreateCurrentPos != null && mc.level != null) {
-                        SelectionManager.getInstance().setPositions(mc.level, boxCreateStartPos, boxCreateCurrentPos);
+                        SelectionManager.getInstance().setPositions(selectionLevel(), boxCreateStartPos, boxCreateCurrentPos);
                         syncSelectionToServer(boxCreateStartPos, boxCreateCurrentPos);
                     }
                     isBoxCreating = false;
@@ -428,6 +461,13 @@ public class GhostModeManager {
         if (p1 == null || p2 == null) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.player.connection == null) return;
+        if (SelectionManager.getInstance().getSelectionSource()
+                != SelectionManager.SelectionSource.SERVER_AUTHORITATIVE) {
+            return;
+        }
+        if (mc.hasSingleplayerServer()) {
+            return;
+        }
         try {
             mc.player.connection.sendCommand(
                 "yefira box " + p1.getX() + " " + p1.getY() + " " + p1.getZ()
@@ -439,14 +479,29 @@ public class GhostModeManager {
 
     /** Clear both the local preview and the server-authoritative selection. */
     public void clearSelectionAndSync() {
+        boolean serverSelection = SelectionManager.getInstance().getSelectionSource()
+                == SelectionManager.SelectionSource.SERVER_AUTHORITATIVE;
         SelectionManager.getInstance().clearSelection();
         Minecraft mc = Minecraft.getInstance();
+        if (!serverSelection || mc.hasSingleplayerServer()) return;
         if (mc.player == null || mc.player.connection == null) return;
         try {
             mc.player.connection.sendCommand("yefira clear");
         } catch (Exception e) {
             Yefira.LOGGER.debug("Failed to clear server selection: {}", e.getMessage());
         }
+    }
+
+    /** In singleplayer the integrated server owns the authoritative Level. */
+    private Level selectionLevel() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null && mc.level != null) {
+            ServerLevel serverLevel = mc.getSingleplayerServer().getLevel(mc.level.dimension());
+            if (serverLevel != null) {
+                return serverLevel;
+            }
+        }
+        return mc.level;
     }
 
     public void cancelBoxDrag() {
@@ -759,11 +814,9 @@ public class GhostModeManager {
         } else {
             basePos = BlockPos.containing(pivotPos);
         }
-        int half = size / 2;
-        BlockPos p1 = basePos.offset(-half, 0, -half);
-        BlockPos p2 = basePos.offset(half - 1, size - 1, half - 1);
-        SelectionManager.getInstance().setPositions(mc.level, p1, p2);
-        syncSelectionToServer(p1, p2);
+        SelectionBox preset = SelectionBox.presetAbove(basePos, size);
+        SelectionManager.getInstance().setPositions(mc.level, preset.getPos1(), preset.getPos2());
+        syncSelectionToServer(preset.getPos1(), preset.getPos2());
         focusSelection();
     }
 
@@ -844,7 +897,7 @@ public class GhostModeManager {
             Minecraft mc = Minecraft.getInstance();
             if (mc.level != null && dragPreviewPos1 != null && dragPreviewPos2 != null) {
                 if (!dragPreviewPos1.equals(initialPos1) || !dragPreviewPos2.equals(initialPos2)) {
-                    SelectionManager.getInstance().setPositions(mc.level, dragPreviewPos1, dragPreviewPos2);
+                    SelectionManager.getInstance().setPositions(selectionLevel(), dragPreviewPos1, dragPreviewPos2);
                     syncSelectionToServer(dragPreviewPos1, dragPreviewPos2);
                 }
             }

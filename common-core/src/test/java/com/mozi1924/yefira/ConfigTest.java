@@ -14,6 +14,7 @@ public class ConfigTest {
         Assertions.assertEquals(8765, config.getPort());
         Assertions.assertFalse(config.isAutoStartOnWorldLoad());
         Assertions.assertEquals("", config.getAuthToken());
+        Assertions.assertFalse(config.isAllowLoopbackWithoutToken());
 
         config.setHost("127.0.0.1");
         Assertions.assertEquals("127.0.0.1", config.getHost());
@@ -30,6 +31,13 @@ public class ConfigTest {
 
         config.setAutoStartOnWorldLoad(true);
         Assertions.assertTrue(config.isAutoStartOnWorldLoad());
+
+        config.setAuthToken("  token  ");
+        Assertions.assertEquals("token", config.getAuthToken());
+        config.setAllowLoopbackWithoutToken(true);
+        Assertions.assertTrue(config.isAllowLoopbackWithoutToken());
+        config.setAllowLoopbackWithoutToken(false);
+        Assertions.assertFalse(config.isAllowLoopbackWithoutToken());
 
         // Soft limit defaults & setters
         Assertions.assertEquals(262144L, config.getMaxVolumeSoftLimit());

@@ -20,11 +20,18 @@ public class LevelCompat26 implements ILevelCompat {
 
     @Override
     public ResourceKey<Level> parseDimensionKey(String dimStr) {
-        Identifier dimId = Identifier.parse(dimStr);
-        if (dimId != null) {
-            return ResourceKey.create(Registries.DIMENSION, dimId);
+        if (dimStr == null || dimStr.isBlank()) {
+            return null;
         }
-        return null;
+        try {
+            // Unlike ResourceLocation.tryParse in older eras, Identifier.parse
+            // throws on malformed input. A bad dimension in a saved selection
+            // must not abort the whole selection load.
+            Identifier dimId = Identifier.parse(dimStr);
+            return ResourceKey.create(Registries.DIMENSION, dimId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override

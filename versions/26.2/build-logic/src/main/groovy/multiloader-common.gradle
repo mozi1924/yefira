@@ -73,7 +73,8 @@ processResources {
             'forge_version'                : project.hasProperty('forge_version') ? forge_version : '',
             'forge_loader_version_range'   : project.hasProperty('forge_loader_version_range') ? forge_loader_version_range : '',
             'credits'                      : credits,
-            'java_version'                 : java_version
+            'java_version'                 : java_version,
+            'pack_format'                  : pack_format
     ]
 
     var jsonExpandProps = expandProps.collectEntries {
