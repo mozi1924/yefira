@@ -328,6 +328,14 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
     }
 
+    private static boolean isLoopbackConnection(WebSocket conn) {
+        if (conn == null || conn.getRemoteSocketAddress() == null) {
+            return false;
+        }
+        InetAddress address = conn.getRemoteSocketAddress().getAddress();
+        return address != null && address.isLoopbackAddress();
+    }
+
     private class Impl extends WebSocketServer {
         public Impl(InetSocketAddress address, Draft_6455 draft) {
             super(address, Collections.singletonList(draft));
@@ -816,9 +824,11 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
     private boolean isAuthorized(WebSocket conn, BlockDataEncoder.HelloPacket hello) {
         YefiraConfig cfg = YefiraConfig.getInstance();
-        // Explicit opt-in: a loopback bind is only reachable from this machine,
-        // so a purely local Blender connection may skip token entry.
-        if (isLoopbackHost(HOST) && cfg.isAllowLoopbackWithoutToken()) {
+        // Explicit opt-in: skip the token for connections that actually arrive
+        // over a loopback socket. Checking the remote address (not the bind
+        // host) also covers the common `0.0.0.0` bind used by existing configs,
+        // while remote clients still have to present the token.
+        if (cfg.isAllowLoopbackWithoutToken() && isLoopbackConnection(conn)) {
             return true;
         }
         String expected = cfg.getAuthToken();
@@ -1207,6 +1217,15 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 }
             }
 
+            if (scan.entities != null && !scan.entities.isEmpty()) {
+                byte[] entitiesPkt = BlockDataEncoder.encodeBaselineEntities(
+                        epoch,
+                        snapshotUuid,
+                        scan.entities
+                );
+                if (!sendStreamFrame(conn, streamGen, selectionGen, streamEpoch, entitiesPkt)) return;
+            }
+
             byte[] endPkt = BlockDataEncoder.encodeBaselineEnd(
                     epoch,
                     snapshotUuid,
@@ -1335,6 +1354,34 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     }
                     for (WebSocket client : List.copyOf(clients)) {
                         sendSafe(client, deltaPkt);
+                    }
+
+                    Level currentLevel = SelectionManager.getInstance().getCurrentLevel();
+                    if (currentLevel != null) {
+                        for (BlockDataEncoder.BlockChangeEntry c : batch) {
+                            if (c.state().hasBlockEntity()) {
+                                net.minecraft.world.level.block.entity.BlockEntity be = currentLevel.getBlockEntity(c.pos());
+                                if (be != null) {
+                                    String json = VersionCompat.level().serializeBlockEntityJson(be);
+                                    if (json != null) {
+                                        int rx = c.pos().getX() - min.getX();
+                                        int ry = c.pos().getY() - min.getY();
+                                        int rz = c.pos().getZ() - min.getZ();
+                                        byte[] deltaEntPkt = BlockDataEncoder.encodeDeltaEntity(
+                                                epoch,
+                                                seqId,
+                                                rx,
+                                                ry,
+                                                rz,
+                                                json.getBytes(StandardCharsets.UTF_8)
+                                        );
+                                        for (WebSocket client : List.copyOf(clients)) {
+                                            sendSafe(client, deltaEntPkt);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -129,4 +129,80 @@ public class ProtocolV3CodecTest {
         Assertions.assertEquals(0x12345678L, hello.cachedStateHash);
         Assertions.assertEquals("minecraft:the_nether", hello.cachedDimension);
     }
+
+    @Test
+    public void testBaselineEntitiesCodec() {
+        byte[] uuid = new byte[16];
+        uuid[0] = 0x77;
+        List<BlockDataEncoder.EntityEntry> entities = new ArrayList<>();
+        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"minecraft:angler_pottery_sherd\", \"\", \"\", \"\"]}";
+        entities.add(new BlockDataEncoder.EntityEntry(1, 2, 3, potJson));
+        entities.add(new BlockDataEncoder.EntityEntry(10, 20, 30, (byte[]) null));
+
+        byte[] bytes = BlockDataEncoder.encodeBaselineEntities(5L, uuid, entities);
+        Assertions.assertEquals(BlockDataEncoder.MAGIC[0], bytes[0]);
+        Assertions.assertEquals(BlockDataEncoder.MAGIC[1], bytes[1]);
+        Assertions.assertEquals(BlockDataEncoder.PROTOCOL_VERSION, bytes[2]);
+        Assertions.assertEquals(BlockDataEncoder.OPCODE_BASELINE_ENTITIES, bytes[3]);
+
+        ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(4);
+        Assertions.assertEquals(5L, buf.getLong()); // epoch
+        byte[] readUuid = new byte[16];
+        buf.get(readUuid);
+        Assertions.assertEquals(0x77, readUuid[0]);
+        Assertions.assertEquals(2, buf.getInt()); // count
+
+        // Entity 1
+        Assertions.assertEquals(1, buf.getInt()); // rx
+        Assertions.assertEquals(2, buf.getInt()); // ry
+        Assertions.assertEquals(3, buf.getInt()); // rz
+        int len1 = buf.getInt();
+        Assertions.assertEquals(potJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, len1);
+        byte[] p1 = new byte[len1];
+        buf.get(p1);
+        Assertions.assertEquals(potJson, new String(p1, java.nio.charset.StandardCharsets.UTF_8));
+
+        // Entity 2
+        Assertions.assertEquals(10, buf.getInt());
+        Assertions.assertEquals(20, buf.getInt());
+        Assertions.assertEquals(30, buf.getInt());
+        int len2 = buf.getInt();
+        Assertions.assertEquals(0, len2);
+    }
+
+    @Test
+    public void testDeltaEntityCodec() {
+        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"minecraft:miner_pottery_sherd\"]}";
+        byte[] payload = potJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        byte[] bytes = BlockDataEncoder.encodeDeltaEntity(5L, 100L, 7, 8, 9, payload);
+        Assertions.assertEquals(BlockDataEncoder.MAGIC[0], bytes[0]);
+        Assertions.assertEquals(BlockDataEncoder.MAGIC[1], bytes[1]);
+        Assertions.assertEquals(BlockDataEncoder.PROTOCOL_VERSION, bytes[2]);
+        Assertions.assertEquals(BlockDataEncoder.OPCODE_DELTA_ENTITY, bytes[3]);
+
+        ByteBuffer buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        buf.position(4);
+        Assertions.assertEquals(5L, buf.getLong()); // epoch
+        Assertions.assertEquals(100L, buf.getLong()); // seqId
+        Assertions.assertEquals(7, buf.getInt()); // rx
+        Assertions.assertEquals(8, buf.getInt()); // ry
+        Assertions.assertEquals(9, buf.getInt()); // rz
+        Assertions.assertEquals(payload.length, buf.getInt()); // payload_len
+        byte[] readPayload = new byte[payload.length];
+        buf.get(readPayload);
+        Assertions.assertArrayEquals(payload, readPayload);
+
+        // Test removal (null payload)
+        byte[] removalBytes = BlockDataEncoder.encodeDeltaEntity(5L, 101L, 7, 8, 9, null);
+        ByteBuffer rBuf = ByteBuffer.wrap(removalBytes).order(ByteOrder.LITTLE_ENDIAN);
+        rBuf.position(4);
+        Assertions.assertEquals(5L, rBuf.getLong());
+        Assertions.assertEquals(101L, rBuf.getLong());
+        Assertions.assertEquals(7, rBuf.getInt());
+        Assertions.assertEquals(8, rBuf.getInt());
+        Assertions.assertEquals(9, rBuf.getInt());
+        Assertions.assertEquals(0, rBuf.getInt()); // payload_len == 0
+    }
 }

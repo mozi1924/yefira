@@ -37,6 +37,9 @@ public class BlockDataEncoder {
     public static final byte OPCODE_PING = 0x0E;
     public static final byte OPCODE_PONG = 0x0F;
     public static final byte OPCODE_ERROR = 0x10;
+    // RFC v3.2 Sparse BlockEntity Opcodes
+    public static final byte OPCODE_BASELINE_ENTITIES = 0x11;
+    public static final byte OPCODE_DELTA_ENTITY = 0x12;
 
     /** RFC v3.1 hard selection volume limit (voxels). */
     public static final long MAX_SELECTION_VOLUME = 33_554_432L;
@@ -103,6 +106,22 @@ public class BlockDataEncoder {
             this.relY = relY;
             this.relZ = relZ;
             this.stateId = stateId;
+        }
+    }
+
+    public static class EntityEntry {
+        public final int relX, relY, relZ;
+        public final byte[] payload;
+
+        public EntityEntry(int relX, int relY, int relZ, byte[] payload) {
+            this.relX = relX;
+            this.relY = relY;
+            this.relZ = relZ;
+            this.payload = payload != null ? payload : new byte[0];
+        }
+
+        public EntityEntry(int relX, int relY, int relZ, String json) {
+            this(relX, relY, relZ, json != null ? json.getBytes(StandardCharsets.UTF_8) : new byte[0]);
         }
     }
 
@@ -323,6 +342,66 @@ public class BlockDataEncoder {
             buf.putInt(e.relY);
             buf.putInt(e.relZ);
             buf.putShort((short) e.stateId);
+        }
+        return buf.array();
+    }
+
+    public static byte[] encodeBaselineEntities(
+            long epoch,
+            byte[] snapshotUuid,
+            List<EntityEntry> entities
+    ) {
+        int totalLen = 4 + 8 + 16 + 4;
+        if (entities != null) {
+            for (EntityEntry e : entities) {
+                totalLen += 4 + 4 + 4 + 4 + e.payload.length;
+            }
+        }
+        ByteBuffer buf = ByteBuffer.allocate(totalLen).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(MAGIC);
+        buf.put(PROTOCOL_VERSION);
+        buf.put(OPCODE_BASELINE_ENTITIES);
+        buf.putLong(epoch);
+        if (snapshotUuid != null && snapshotUuid.length >= 16) {
+            buf.put(snapshotUuid, 0, 16);
+        } else {
+            buf.put(new byte[16]);
+        }
+        int count = entities != null ? entities.size() : 0;
+        buf.putInt(count);
+        if (entities != null) {
+            for (EntityEntry e : entities) {
+                buf.putInt(e.relX);
+                buf.putInt(e.relY);
+                buf.putInt(e.relZ);
+                buf.putInt(e.payload.length);
+                buf.put(e.payload);
+            }
+        }
+        return buf.array();
+    }
+
+    public static byte[] encodeDeltaEntity(
+            long epoch,
+            long seqId,
+            int relX,
+            int relY,
+            int relZ,
+            byte[] payload
+    ) {
+        int payloadLen = payload != null ? payload.length : 0;
+        ByteBuffer buf = ByteBuffer.allocate(4 + 8 + 8 + 4 + 4 + 4 + 4 + payloadLen).order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(MAGIC);
+        buf.put(PROTOCOL_VERSION);
+        buf.put(OPCODE_DELTA_ENTITY);
+        buf.putLong(epoch);
+        buf.putLong(seqId);
+        buf.putInt(relX);
+        buf.putInt(relY);
+        buf.putInt(relZ);
+        buf.putInt(payloadLen);
+        if (payloadLen > 0) {
+            buf.put(payload);
         }
         return buf.array();
     }

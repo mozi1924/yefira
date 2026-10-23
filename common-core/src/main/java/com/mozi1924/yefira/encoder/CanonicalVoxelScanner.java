@@ -50,6 +50,7 @@ public class CanonicalVoxelScanner {
         public final int paletteBitsPerBlock;
         public final int biomeBitsPerQuart;
         public final long stateHash;
+        public final List<BlockDataEncoder.EntityEntry> entities;
 
         public BaselineScanResult(
                 BlockPos minPos,
@@ -63,6 +64,22 @@ public class CanonicalVoxelScanner {
                 int biomeBitsPerQuart,
                 long stateHash
         ) {
+            this(minPos, sizeX, sizeY, sizeZ, totalVoxels, dimension, blockPalette, biomePalette, payload, paletteBitsPerBlock, biomeBitsPerQuart, stateHash, Collections.emptyList());
+        }
+
+        public BaselineScanResult(
+                BlockPos minPos,
+                int sizeX, int sizeY, int sizeZ,
+                long totalVoxels,
+                String dimension,
+                List<String> blockPalette,
+                List<String> biomePalette,
+                byte[] payload,
+                int paletteBitsPerBlock,
+                int biomeBitsPerQuart,
+                long stateHash,
+                List<BlockDataEncoder.EntityEntry> entities
+        ) {
             this.minPos = minPos;
             this.sizeX = sizeX;
             this.sizeY = sizeY;
@@ -75,6 +92,7 @@ public class CanonicalVoxelScanner {
             this.paletteBitsPerBlock = paletteBitsPerBlock;
             this.biomeBitsPerQuart = biomeBitsPerQuart;
             this.stateHash = stateHash;
+            this.entities = entities != null ? entities : Collections.emptyList();
         }
     }
 
@@ -392,6 +410,31 @@ public class CanonicalVoxelScanner {
             }
         }
 
+        // 4. BlockEntity Scan (Sparse RFC v3.2)
+        List<BlockDataEncoder.EntityEntry> entities = new ArrayList<>();
+        try {
+            com.mozi1924.yefira.compat.ILevelCompat levelCompat = com.mozi1924.yefira.compat.VersionCompat.level();
+            for (int cz = 0; cz < chunksD; cz++) {
+                for (int cx = 0; cx < chunksW; cx++) {
+                    LevelChunk chunk = chunkGrid[cx][cz];
+                    if (chunk == null) continue;
+                    for (Map.Entry<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                        BlockPos p = entry.getKey();
+                        if (box.contains(p)) {
+                            String json = levelCompat.serializeBlockEntityJson(entry.getValue());
+                            if (json != null && !json.isEmpty()) {
+                                int rx = p.getX() - minX;
+                                int ry = p.getY() - minY;
+                                int relZ = p.getZ() - minZ;
+                                entities.add(new BlockDataEncoder.EntityEntry(rx, ry, relZ, json));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
         return new BaselineScanResult(
                 min,
                 sizeX, sizeY, sizeZ,
@@ -402,7 +445,8 @@ public class CanonicalVoxelScanner {
                 payload,
                 bitsPerBlock,
                 biomeBits,
-                finalStateHash
+                finalStateHash,
+                entities
         );
     }
 

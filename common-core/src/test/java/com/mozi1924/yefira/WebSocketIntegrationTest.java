@@ -159,6 +159,40 @@ public class WebSocketIntegrationTest {
     }
 
     @Test
+    public void testLoopbackBypassWorksWithWildcardBind() throws Exception {
+        WebSocketServerManager server = WebSocketServerManager.getInstance();
+        server.stopServer();
+        YefiraConfig cfg = YefiraConfig.getInstance();
+        String previous = cfg.getAuthToken();
+        boolean previousBypass = cfg.isAllowLoopbackWithoutToken();
+        cfg.setAuthToken("secret-token");
+        cfg.setAllowLoopbackWithoutToken(true);
+        WebSocketClient client = null;
+        try {
+            Assertions.assertTrue(server.startServer("0.0.0.0", 18770));
+            client = new WebSocketClient(new URI("ws://" + TEST_HOST + ":18770")) {
+                @Override public void onOpen(ServerHandshake handshakedata) {
+                    send(helloBytes(""));
+                }
+                @Override public void onMessage(String message) { }
+                @Override public void onClose(int code, String reason, boolean remote) { }
+                @Override public void onError(Exception ex) { }
+            };
+            Assertions.assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            Thread.sleep(200);
+            Assertions.assertEquals(1, server.getConnectedCount(),
+                    "A loopback client must bypass the token even when the bind host is 0.0.0.0");
+        } finally {
+            if (client != null) {
+                try { client.closeBlocking(); } catch (Exception ignored) { }
+            }
+            cfg.setAuthToken(previous);
+            cfg.setAllowLoopbackWithoutToken(previousBypass);
+            server.stopServer();
+        }
+    }
+
+    @Test
     public void testNonLoopbackWithoutTokenIsRejected() throws Exception {
         WebSocketServerManager server = WebSocketServerManager.getInstance();
         server.stopServer();

@@ -51,4 +51,11 @@ public interface ILevelCompat {
      * Returns an array of 64 namespaced biome IDs indexed as (qy &lt;&lt; 4) | (qz &lt;&lt; 2) | qx.
      */
     String[] getSectionQuartBiomes(Level level, int secX, int secY, int secZ);
+
+    /**
+     * Serializes a BlockEntity to JSON if supported (e.g. decorated pot), or returns null.
+     */
+    default String serializeBlockEntityJson(net.minecraft.world.level.block.entity.BlockEntity be) {
+        return null;
+    }
 }

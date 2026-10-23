@@ -91,4 +91,32 @@ public class LevelCompat1204 implements ILevelCompat {
         }
         return biomes;
     }
+
+    @Override
+    public String serializeBlockEntityJson(net.minecraft.world.level.block.entity.BlockEntity be) {
+        if (be instanceof net.minecraft.world.level.block.entity.DecoratedPotBlockEntity pot) {
+            var dec = pot.getDecorations();
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"id\":\"minecraft:decorated_pot\",\"sherds\":[");
+            appendItem(sb, dec.back());
+            sb.append(",");
+            appendItem(sb, dec.left());
+            sb.append(",");
+            appendItem(sb, dec.right());
+            sb.append(",");
+            appendItem(sb, dec.front());
+            sb.append("]}");
+            return sb.toString();
+        }
+        return null;
+    }
+
+    private static void appendItem(StringBuilder sb, net.minecraft.world.item.Item item) {
+        if (item != null && item != net.minecraft.world.item.Items.AIR && item != net.minecraft.world.item.Items.BRICK) {
+            net.minecraft.resources.ResourceLocation key = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item);
+            sb.append("\"").append(key.toString()).append("\"");
+            return;
+        }
+        sb.append("\"\"");
+    }
 }
