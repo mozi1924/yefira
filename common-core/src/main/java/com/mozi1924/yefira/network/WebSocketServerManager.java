@@ -1343,19 +1343,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     }
                     byte[] deltaPkt = BlockDataEncoder.encodeDeltaOp(epoch, seqId, paletteRevision, deltaEntries);
 
-                    // Send while still holding paletteLock so a concurrently starting
-                    // baseline can neither capture its snapshot barrier before this batch
-                    // nor reset the palette between encoding and transmission. WebSocket
-                    // send() only enqueues the frame, so the lock is held briefly.
-                    if (palPkt != null) {
-                        for (WebSocket client : List.copyOf(clients)) {
-                            sendSafe(client, palPkt);
-                        }
-                    }
-                    for (WebSocket client : List.copyOf(clients)) {
-                        sendSafe(client, deltaPkt);
-                    }
-
+                    List<byte[]> entityPackets = new ArrayList<>();
                     Level currentLevel = SelectionManager.getInstance().getCurrentLevel();
                     if (currentLevel != null) {
                         for (BlockDataEncoder.BlockChangeEntry c : batch) {
@@ -1367,20 +1355,31 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                                         int rx = c.pos().getX() - min.getX();
                                         int ry = c.pos().getY() - min.getY();
                                         int rz = c.pos().getZ() - min.getZ();
-                                        byte[] deltaEntPkt = BlockDataEncoder.encodeDeltaEntity(
+                                        entityPackets.add(BlockDataEncoder.encodeDeltaEntity(
                                                 epoch,
                                                 seqId,
                                                 rx,
                                                 ry,
                                                 rz,
                                                 json.getBytes(StandardCharsets.UTF_8)
-                                        );
-                                        for (WebSocket client : List.copyOf(clients)) {
-                                            sendSafe(client, deltaEntPkt);
-                                        }
+                                        ));
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // Send while still holding paletteLock so a concurrently starting
+                    // baseline can neither capture its snapshot barrier before this batch
+                    // nor reset the palette between encoding and transmission. WebSocket
+                    // send() only enqueues the frame, so the lock is held briefly.
+                    for (WebSocket client : List.copyOf(clients)) {
+                        if (palPkt != null) {
+                            sendSafe(client, palPkt);
+                        }
+                        sendSafe(client, deltaPkt);
+                        for (byte[] deltaEntPkt : entityPackets) {
+                            sendSafe(client, deltaEntPkt);
                         }
                     }
                 }
