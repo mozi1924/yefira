@@ -6,6 +6,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 
 public class YefiraFabric implements ModInitializer {
 
@@ -22,5 +23,13 @@ public class YefiraFabric implements ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register(Yefira::onServerTick);
         ServerLifecycleEvents.SERVER_STARTED.register(Yefira::onServerStarted);
         ServerLifecycleEvents.SERVER_STOPPING.register(Yefira::onServerStopping);
+
+        // Player connection lifecycle events
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            Yefira.onPlayerJoin(handler.getPlayer());
+        });
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            Yefira.onPlayerDisconnect(handler.getPlayer());
+        });
     }
 }

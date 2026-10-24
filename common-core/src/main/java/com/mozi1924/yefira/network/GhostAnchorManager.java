@@ -67,10 +67,15 @@ public final class GhostAnchorManager {
         }
         Anchor anchor = ANCHORS.remove(player.getUUID());
         if (anchor == null) {
+            if (player.isNoGravity()) {
+                player.setNoGravity(false);
+            }
             return false;
         }
         player.setInvulnerable(anchor.wasInvulnerable());
-        player.setNoGravity(anchor.wasNoGravity());
+        // Normal players should never have NoGravity: true in Minecraft.
+        // Always reset to false to avoid lingering floating states.
+        player.setNoGravity(false);
         player.setDeltaMovement(Vec3.ZERO);
         player.resetFallDistance();
         Yefira.LOGGER.info("Ghost anchor disabled for {}", player.getScoreboardName());
@@ -79,6 +84,29 @@ public final class GhostAnchorManager {
 
     public static boolean isActive(UUID playerUuid) {
         return playerUuid != null && ANCHORS.containsKey(playerUuid);
+    }
+
+    /** Called when a player disconnects to clean up their anchor and restore flags before saving. */
+    public static synchronized void onPlayerDisconnect(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (ANCHORS.containsKey(player.getUUID())) {
+            disable(player);
+        } else if (player.isNoGravity()) {
+            player.setNoGravity(false);
+        }
+    }
+
+    /** Called when a player joins to ensure no invalid lingering NoGravity state exists. */
+    public static void onPlayerJoin(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (player.isNoGravity()) {
+            player.setNoGravity(false);
+            Yefira.LOGGER.info("Cleared lingering NoGravity state for player {} on join", player.getScoreboardName());
+        }
     }
 
     /** Pins every ghosting player back to their anchor once per server tick. */
@@ -110,14 +138,36 @@ public final class GhostAnchorManager {
         }
     }
 
-    /** Clears all anchors without restoring (used while the server is stopping). */
-    public static void clearAll() {
+    /** Restores all active anchors before the server stops. */
+    public static synchronized void restoreAll(MinecraftServer server) {
+        if (server != null && !ANCHORS.isEmpty()) {
+            for (Map.Entry<UUID, Anchor> entry : ANCHORS.entrySet()) {
+                ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
+                if (player != null) {
+                    Anchor anchor = entry.getValue();
+                    player.setInvulnerable(anchor.wasInvulnerable());
+                    player.setNoGravity(false);
+                    player.setDeltaMovement(Vec3.ZERO);
+                    player.resetFallDistance();
+                    Yefira.LOGGER.info("Ghost anchor restored on server stopping for {}", player.getScoreboardName());
+                }
+            }
+        }
         ANCHORS.clear();
+    }
+
+    /** Clears all anchors without restoring (fallback / legacy). */
+    public static void clearAll() {
+        restoreAll(null);
     }
 
     private static void applyProtection(ServerPlayer player, Anchor anchor) {
         player.setInvulnerable(true);
-        player.setNoGravity(true);
+        // Do not set NoGravity for creative or spectator players to avoid
+        // corrupting creative flight physics and persisting hovering state on disk.
+        if (!player.isCreative() && !player.isSpectator()) {
+            player.setNoGravity(true);
+        }
         player.setDeltaMovement(Vec3.ZERO);
         player.resetFallDistance();
         player.setRemainingFireTicks(0);

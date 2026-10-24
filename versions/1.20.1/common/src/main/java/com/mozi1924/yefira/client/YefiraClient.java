@@ -69,6 +69,9 @@ public class YefiraClient {
     }
 
     public static void onClientJoinServer(Minecraft client) {
+        if (GhostModeManager.getInstance().isActive()) {
+            GhostModeManager.getInstance().disable();
+        }
         // Local export mode scans ClientLevel chunks on the client thread.
         ClientThread.setExecutor(client::execute);
         boolean multi = !client.hasSingleplayerServer();

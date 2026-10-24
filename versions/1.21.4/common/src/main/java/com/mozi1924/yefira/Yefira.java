@@ -9,6 +9,7 @@ import com.mozi1924.yefira.selection.SelectionStorageManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,11 +70,25 @@ public class Yefira {
     }
 
     /**
+     * Common player joined server lifecycle hook.
+     */
+    public static void onPlayerJoin(ServerPlayer player) {
+        GhostAnchorManager.onPlayerJoin(player);
+    }
+
+    /**
+     * Common player disconnected server lifecycle hook.
+     */
+    public static void onPlayerDisconnect(ServerPlayer player) {
+        GhostAnchorManager.onPlayerDisconnect(player);
+    }
+
+    /**
      * Common server stopping lifecycle hook.
      */
     public static void onServerStopping(MinecraftServer server) {
         ServerThread.clear();
-        GhostAnchorManager.clearAll();
+        GhostAnchorManager.restoreAll(server);
         WebSocketServerManager.getInstance().stopServer();
         SelectionManager.getInstance().resetOnWorldUnload();
     }
