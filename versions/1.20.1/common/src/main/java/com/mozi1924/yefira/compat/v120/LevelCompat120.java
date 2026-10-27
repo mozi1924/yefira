@@ -96,27 +96,55 @@ public class LevelCompat120 implements ILevelCompat {
     public String serializeBlockEntityJson(net.minecraft.world.level.block.entity.BlockEntity be) {
         if (be instanceof net.minecraft.world.level.block.entity.DecoratedPotBlockEntity pot) {
             var dec = pot.getDecorations();
-            StringBuilder sb = new StringBuilder();
-            sb.append("{\"id\":\"minecraft:decorated_pot\",\"sherds\":[");
-            appendItem(sb, dec.back());
-            sb.append(",");
-            appendItem(sb, dec.left());
-            sb.append(",");
-            appendItem(sb, dec.right());
-            sb.append(",");
-            appendItem(sb, dec.front());
-            sb.append("]}");
-            return sb.toString();
+            return com.mozi1924.yefira.compat.visual.VisualBlockEntity.serializeDecoratedPot(
+                    getItemKey(dec.back()),
+                    getItemKey(dec.left()),
+                    getItemKey(dec.right()),
+                    getItemKey(dec.front())
+            );
+        }
+        if (be instanceof net.minecraft.world.level.block.entity.SkullBlockEntity skull) {
+            String path = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(be.getBlockState().getBlock()).getPath();
+            String kind = com.mozi1924.yefira.compat.visual.VisualBlockEntity.resolveSkullKind(path);
+            Integer rot = null;
+            if (be.getBlockState().hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.ROTATION_16)) {
+                rot = be.getBlockState().getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.ROTATION_16);
+            }
+            com.mojang.authlib.GameProfile profile = skull.getOwnerProfile();
+            String name = null;
+            String id = null;
+            String skinBase64 = null;
+            if (profile != null) {
+                name = profile.getName();
+                if (profile.getId() != null) {
+                    id = profile.getId().toString();
+                }
+                var props = profile.getProperties();
+                if (props != null) {
+                    var textures = props.get("textures");
+                    if (textures != null && !textures.isEmpty()) {
+                        for (var p : textures) {
+                            skinBase64 = p.getValue();
+                            break;
+                        }
+                    }
+                }
+            }
+            return com.mozi1924.yefira.compat.visual.VisualBlockEntity.serializeSkull(
+                    kind,
+                    rot,
+                    name,
+                    id,
+                    skinBase64
+            );
         }
         return null;
     }
 
-    private static void appendItem(StringBuilder sb, net.minecraft.world.item.Item item) {
+    private static String getItemKey(net.minecraft.world.item.Item item) {
         if (item != null && item != net.minecraft.world.item.Items.AIR && item != net.minecraft.world.item.Items.BRICK) {
-            net.minecraft.resources.ResourceLocation key = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item);
-            sb.append("\"").append(key.toString()).append("\"");
-            return;
+            return net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString();
         }
-        sb.append("\"\"");
+        return "";
     }
 }
