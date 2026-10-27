@@ -2,6 +2,7 @@ package com.mozi1924.yefira.client.ghost;
 
 import com.mozi1924.yefira.selection.SelectionBox;
 import com.mozi1924.yefira.selection.SelectionManager;
+import com.mozi1924.yefira.selection.SelectionStyle;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gizmos.GizmoStyle;
@@ -11,11 +12,11 @@ import net.minecraft.world.phys.Vec3;
 
 public class GhostGizmoRenderer {
 
-    public static final int COLOR_X = 0xFFFF3333; // Red
-    public static final int COLOR_Y = 0xFF33FF33; // Green
-    public static final int COLOR_Z = 0xFF3388FF; // Blue
-    public static final int COLOR_CENTER = 0xFFFFCC00; // Gold
-    public static final int COLOR_HIGHLIGHT = 0xFFFFFF55; // Bright Yellow
+    public static final int COLOR_X = SelectionStyle.COLOR_HANDLE_X;
+    public static final int COLOR_Y = SelectionStyle.COLOR_HANDLE_Y;
+    public static final int COLOR_Z = SelectionStyle.COLOR_HANDLE_Z;
+    public static final int COLOR_CENTER = SelectionStyle.COLOR_HANDLE_CENTER;
+    public static final int COLOR_HIGHLIGHT = SelectionStyle.COLOR_HANDLE_HIGHLIGHT;
 
     public static void render() {
         Minecraft mc = Minecraft.getInstance();
@@ -33,8 +34,12 @@ public class GhostGizmoRenderer {
                 hPos.getX(), hPos.getY(), hPos.getZ(),
                 hPos.getX() + 1.0, hPos.getY() + 1.0, hPos.getZ() + 1.0
             );
-            // Glowing Cyan-White Stroke with subtle fill
-            Gizmos.cuboid(blockBox, GizmoStyle.strokeAndFill(0xFF00FFEE, 3.0f, 0x3300FFEE));
+            // Glowing Cyan Stroke with subtle fill
+            Gizmos.cuboid(blockBox, GizmoStyle.strokeAndFill(
+                SelectionStyle.COLOR_HOVER_BLOCK_STROKE,
+                SelectionStyle.WIDTH_HOVER_BLOCK_STROKE,
+                SelectionStyle.COLOR_HOVER_BLOCK_FILL
+            ));
         }
 
         // 2. Render Box Creation Preview when dragging to create
@@ -48,15 +53,15 @@ public class GhostGizmoRenderer {
                     bMax.getX() + 1.0, bMax.getY() + 1.0, bMax.getZ() + 1.0
                 );
                 boolean oversized = boxCreate.isOversized();
-                int strokeColor = oversized ? 0xFFFF3300 : 0xFF00FF55;
-                int fillColor = oversized ? 0x4DFF3300 : 0x4000FF55;
-                Gizmos.cuboid(createBox, GizmoStyle.strokeAndFill(strokeColor, 3.5f, fillColor));
+                int strokeColor = oversized ? SelectionStyle.COLOR_BOX_CREATE_OVERSIZED_STROKE : SelectionStyle.COLOR_BOX_CREATE_NORMAL_STROKE;
+                int fillColor = oversized ? SelectionStyle.COLOR_BOX_CREATE_OVERSIZED_FILL : SelectionStyle.COLOR_BOX_CREATE_NORMAL_FILL;
+                Gizmos.cuboid(createBox, GizmoStyle.strokeAndFill(strokeColor, SelectionStyle.WIDTH_BOX_CREATE_STROKE, fillColor));
 
                 // Corner indicators
                 Vec3 startCorner = new Vec3(bMin.getX() + 0.5, bMin.getY() + 0.5, bMin.getZ() + 0.5);
                 Vec3 endCorner = new Vec3(bMax.getX() + 0.5, bMax.getY() + 0.5, bMax.getZ() + 0.5);
-                Gizmos.point(startCorner, strokeColor, 8.0f);
-                Gizmos.point(endCorner, oversized ? 0xFFFF7755 : 0xFFFFFF55, 8.0f);
+                Gizmos.point(startCorner, strokeColor, SelectionStyle.CORNER_POINT_SIZE);
+                Gizmos.point(endCorner, oversized ? SelectionStyle.COLOR_BOX_CREATE_CORNER_END_OVERSIZED : SelectionStyle.COLOR_BOX_CREATE_CORNER_END, SelectionStyle.CORNER_POINT_SIZE);
             }
             return; // Do not render old gizmos while actively dragging a new box
         }
@@ -72,13 +77,13 @@ public class GhostGizmoRenderer {
         // Render Pos1 Gizmo
         if (pos1 != null) {
             Vec3 origin1 = new Vec3(pos1.getX() + 0.5, pos1.getY() + 0.5, pos1.getZ() + 0.5);
-            renderCornerGizmo(origin1, GhostModeManager.CORNER_POS1, "Pos 1", 0xFF00FFCC);
+            renderCornerGizmo(origin1, GhostModeManager.CORNER_POS1, "Pos 1", SelectionStyle.COLOR_HANDLE_POS1);
         }
 
         // Render Pos2 Gizmo
         if (pos2 != null) {
             Vec3 origin2 = new Vec3(pos2.getX() + 0.5, pos2.getY() + 0.5, pos2.getZ() + 0.5);
-            renderCornerGizmo(origin2, GhostModeManager.CORNER_POS2, "Pos 2", 0xFFFF00CC);
+            renderCornerGizmo(origin2, GhostModeManager.CORNER_POS2, "Pos 2", SelectionStyle.COLOR_HANDLE_POS2);
         }
 
         // Render Center Move Gizmo if both pos1 and pos2 are set
@@ -106,8 +111,8 @@ public class GhostGizmoRenderer {
         GhostModeManager ghost = GhostModeManager.getInstance();
         Vec3 cameraPos = ghost.getCameraPos();
         double dist = Math.max(0.5, origin.distanceTo(cameraPos));
-        float axisLength = (float) (dist * 0.15);
-        float centerHalf = (float) (dist * 0.018);
+        float axisLength = (float) (dist * SelectionStyle.HANDLE_AXIS_RATIO);
+        float centerHalf = (float) (dist * SelectionStyle.HANDLE_CENTER_RATIO);
 
         int hoveredCorner = ghost.getHoveredCorner();
         int hoveredAxis = ghost.getHoveredAxis();
@@ -148,7 +153,7 @@ public class GhostGizmoRenderer {
         GhostModeManager ghost = GhostModeManager.getInstance();
         Vec3 cameraPos = ghost.getCameraPos();
         double dist = Math.max(0.5, center.distanceTo(cameraPos));
-        float axisLength = (float) (dist * 0.15);
+        float axisLength = (float) (dist * SelectionStyle.HANDLE_AXIS_RATIO);
 
         int hoveredCorner = ghost.getHoveredCorner();
         int hoveredAxis = ghost.getHoveredAxis();

@@ -19,7 +19,10 @@ import net.minecraft.server.level.ServerPlayer;
 public class SelectionCommand {
 
     private static boolean hasAdminPermission(CommandSourceStack source) {
-        return com.mozi1924.yefira.compat.VersionCompat.level().hasAdminPermission(source);
+        if (source != null && source.getServer() != null) {
+            return com.mozi1924.yefira.compat.VersionCompat.level().hasAdminPermission(source);
+        }
+        return false;
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {

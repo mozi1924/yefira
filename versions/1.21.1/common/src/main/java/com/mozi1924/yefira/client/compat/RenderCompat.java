@@ -65,6 +65,20 @@ public class RenderCompat {
     }
 
     /**
+     * Renders a translucent selection filled box (depth test on, depth write disabled, no backface culling).
+     */
+    public static void renderSelectionFilledBox(PoseStack poseStack, MultiBufferSource bufferSource, AABB box,
+                                                float r, float g, float b, float a) {
+        VertexConsumer consumer = bufferSource.getBuffer(com.mozi1924.yefira.client.render.YefiraRenderTypes.selectionFilledBox());
+        LevelRenderer.addChainedFilledBoxVertices(
+            poseStack, consumer,
+            box.minX, box.minY, box.minZ,
+            box.maxX, box.maxY, box.maxZ,
+            r, g, b, a
+        );
+    }
+
+    /**
      * Renders an Always-On-Top translucent filled box (no depth test).
      */
     public static void renderGizmoFilledBox(PoseStack poseStack, MultiBufferSource bufferSource, AABB box,
@@ -76,5 +90,14 @@ public class RenderCompat {
             box.maxX, box.maxY, box.maxZ,
             r, g, b, a
         );
+    }
+
+    /**
+     * Flushes the last batch in bufferSource immediately.
+     */
+    public static void endLastBatch(MultiBufferSource bufferSource) {
+        if (bufferSource instanceof MultiBufferSource.BufferSource bs) {
+            bs.endLastBatch();
+        }
     }
 }

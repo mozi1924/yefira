@@ -1,7 +1,9 @@
 package com.mozi1924.yefira.client.render;
 
+import com.mozi1924.yefira.client.ghost.GhostModeManager;
 import com.mozi1924.yefira.selection.SelectionBox;
 import com.mozi1924.yefira.selection.SelectionManager;
+import com.mozi1924.yefira.selection.SelectionStyle;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gizmos.GizmoStyle;
@@ -35,12 +37,12 @@ public class SelectionBoxRenderer {
 
         boolean isOversized = selection.isOversized();
         GizmoStyle style = isOversized
-            ? GizmoStyle.strokeAndFill(0xF0FF2222, 2.5f, 0x40FF2222)
-            : GizmoStyle.strokeAndFill(0xE600FFFF, 2.0f, 0x3300FFFF);
+            ? GizmoStyle.strokeAndFill(SelectionStyle.COLOR_OVERSIZED_STROKE, SelectionStyle.WIDTH_OVERSIZED_STROKE, SelectionStyle.COLOR_OVERSIZED_FILL)
+            : GizmoStyle.strokeAndFill(SelectionStyle.COLOR_NORMAL_STROKE, SelectionStyle.WIDTH_NORMAL_STROKE, SelectionStyle.COLOR_NORMAL_FILL);
         Gizmos.cuboid(box, style);
 
         // Render Drag Preview Box if actively dragging in Ghost Mode
-        com.mozi1924.yefira.client.ghost.GhostModeManager ghost = com.mozi1924.yefira.client.ghost.GhostModeManager.getInstance();
+        GhostModeManager ghost = GhostModeManager.getInstance();
         if (ghost.isDragging()) {
             SelectionBox previewSel = ghost.getDragPreviewSelection();
             if (previewSel != null) {
@@ -52,8 +54,8 @@ public class SelectionBoxRenderer {
                 );
                 boolean previewOversized = previewSel.isOversized();
                 GizmoStyle previewStyle = previewOversized
-                    ? GizmoStyle.strokeAndFill(0xF0FF3300, 2.5f, 0x4DFF3300)
-                    : GizmoStyle.strokeAndFill(0xE600FF00, 2.5f, 0x4000FF00);
+                    ? GizmoStyle.strokeAndFill(SelectionStyle.COLOR_PREVIEW_OVERSIZED_STROKE, SelectionStyle.WIDTH_PREVIEW_STROKE, SelectionStyle.COLOR_PREVIEW_OVERSIZED_FILL)
+                    : GizmoStyle.strokeAndFill(SelectionStyle.COLOR_PREVIEW_NORMAL_STROKE, SelectionStyle.WIDTH_PREVIEW_STROKE, SelectionStyle.COLOR_PREVIEW_NORMAL_FILL);
                 Gizmos.cuboid(previewBox, previewStyle);
             }
         }

@@ -1,20 +1,12 @@
 package com.mozi1924.yefira;
 
-import com.mozi1924.yefira.compat.ServerThread;
+import com.mozi1924.yefira.compat.CommonServerHooks;
 import com.mozi1924.yefira.config.YefiraConfig;
-import com.mozi1924.yefira.network.GhostAnchorManager;
-import com.mozi1924.yefira.network.WebSocketServerManager;
-import com.mozi1924.yefira.selection.SelectionManager;
-import com.mozi1924.yefira.selection.SelectionStorageManager;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.nio.file.Path;
 
 public class Yefira {
     public static final String MOD_ID = "yefira";
@@ -27,70 +19,24 @@ public class Yefira {
         LOGGER.info("Yefira Common initialized successfully!");
     }
 
-    /**
-     * Common server tick hook.
-     */
     public static void onServerTick(MinecraftServer server) {
-        WebSocketServerManager.getInstance().flushQueuedDeltaUpdates();
-        WebSocketServerManager.getInstance().tickValidationHeartbeat(server.getTickCount());
-        GhostAnchorManager.tick(server);
+        CommonServerHooks.onServerTick(server);
     }
 
-    /**
-     * Common server started lifecycle hook.
-     */
     public static void onServerStarted(MinecraftServer server) {
-        ServerThread.setExecutor(server::execute);
-
-        Path worldDir = server.getWorldPath(LevelResource.ROOT);
-        Path storagePath = SelectionStorageManager.getWorldStoragePath(worldDir);
-        SelectionStorageManager.SelectionData saved = SelectionStorageManager.loadFromPath(storagePath);
-        ServerLevel level = saved != null && saved.dimension() != null
-                ? server.getLevel(saved.dimension())
-                : server.overworld();
-        if (level == null) {
-            LOGGER.warn("Saved selection dimension is not loaded; ignoring saved selection.");
-            SelectionManager.getInstance().resetOnWorldUnload();
-        } else {
-            boolean loaded = SelectionManager.getInstance().loadSavedSelection(storagePath, level);
-            if (loaded) {
-                LOGGER.info("Loaded saved selection for world: {}", worldDir.getFileName());
-            }
-        }
-
-        YefiraConfig cfg = YefiraConfig.getInstance();
-        if (cfg.isAutoStartOnWorldLoad()) {
-            boolean started = WebSocketServerManager.getInstance().startServer(cfg.getHost(), cfg.getPort());
-            if (!started) {
-                LOGGER.error("WebSocket Server auto-start failed; check the configured host/port/auth token.");
-            }
-        } else {
-            LOGGER.info("WebSocket Server auto-start is disabled (on-demand mode).");
-        }
+        CommonServerHooks.onServerStarted(server);
     }
 
-    /**
-     * Common player joined server lifecycle hook.
-     */
     public static void onPlayerJoin(ServerPlayer player) {
-        GhostAnchorManager.onPlayerJoin(player);
+        CommonServerHooks.onPlayerJoin(player);
     }
 
-    /**
-     * Common player disconnected server lifecycle hook.
-     */
     public static void onPlayerDisconnect(ServerPlayer player) {
-        GhostAnchorManager.onPlayerDisconnect(player);
+        CommonServerHooks.onPlayerDisconnect(player);
     }
 
-    /**
-     * Common server stopping lifecycle hook.
-     */
     public static void onServerStopping(MinecraftServer server) {
-        ServerThread.clear();
-        GhostAnchorManager.restoreAll(server);
-        WebSocketServerManager.getInstance().stopServer();
-        SelectionManager.getInstance().resetOnWorldUnload();
+        CommonServerHooks.onServerStopping(server);
     }
 
     public static Identifier id(String path) {

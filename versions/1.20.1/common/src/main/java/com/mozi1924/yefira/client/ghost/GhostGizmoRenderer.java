@@ -3,13 +3,13 @@ package com.mozi1924.yefira.client.ghost;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mozi1924.yefira.client.compat.RenderCompat;
+import com.mozi1924.yefira.client.render.YefiraRenderTypes;
 import com.mozi1924.yefira.selection.SelectionBox;
 import com.mozi1924.yefira.selection.SelectionManager;
+import com.mozi1924.yefira.selection.SelectionStyle;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -19,11 +19,11 @@ import java.util.List;
 
 public class GhostGizmoRenderer {
 
-    public static final int COLOR_X = 0xFFFF3333; // Red
-    public static final int COLOR_Y = 0xFF33FF33; // Green
-    public static final int COLOR_Z = 0xFF3388FF; // Blue
-    public static final int COLOR_CENTER = 0xFFFFCC00; // Gold
-    public static final int COLOR_HIGHLIGHT = 0xFFFFFF55; // Bright Yellow
+    public static final int COLOR_X = SelectionStyle.COLOR_HANDLE_X;
+    public static final int COLOR_Y = SelectionStyle.COLOR_HANDLE_Y;
+    public static final int COLOR_Z = SelectionStyle.COLOR_HANDLE_Z;
+    public static final int COLOR_CENTER = SelectionStyle.COLOR_HANDLE_CENTER;
+    public static final int COLOR_HIGHLIGHT = SelectionStyle.COLOR_HANDLE_HIGHLIGHT;
 
     private static class GizmoData {
         final AABB centerBox;
@@ -58,17 +58,30 @@ public class GhostGizmoRenderer {
         SelectionManager mgr = SelectionManager.getInstance();
         Vec3 camPos = camera.getPosition();
 
-        // 1. Render Hovered Block Outline in Free Cursor Mode
+        // 1. Render Hovered Block Outline in Free Cursor Mode (when not dragging and no selection exists)
         if (!ghost.isDragging() && !ghost.isBoxCreating() && !mgr.hasSelection() && ghost.getHoveredBlockPos() != null) {
             BlockPos hPos = ghost.getHoveredBlockPos();
             AABB blockBox = new AABB(
                 hPos.getX() - camPos.x, hPos.getY() - camPos.y, hPos.getZ() - camPos.z,
                 hPos.getX() + 1.0 - camPos.x, hPos.getY() + 1.0 - camPos.y, hPos.getZ() + 1.0 - camPos.z
             );
-            RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, blockBox, 0.0f, 1.0f, 0.93f, 0.2f);
-            VertexConsumer lineBuffer = bufferSource.getBuffer(com.mozi1924.yefira.client.render.YefiraRenderTypes.selectionLines());
-            RenderCompat.renderLineBox(poseStack, lineBuffer, blockBox, 0.0f, 1.0f, 0.93f, 1.0f);
+            RenderCompat.renderSelectionFilledBox(
+                poseStack, bufferSource, blockBox,
+                SelectionStyle.r(SelectionStyle.COLOR_HOVER_BLOCK_FILL),
+                SelectionStyle.g(SelectionStyle.COLOR_HOVER_BLOCK_FILL),
+                SelectionStyle.b(SelectionStyle.COLOR_HOVER_BLOCK_FILL),
+                SelectionStyle.a(SelectionStyle.COLOR_HOVER_BLOCK_FILL)
+            );
+            VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.gizmoLines());
+            RenderCompat.renderLineBox(
+                poseStack, lineBuffer, blockBox,
+                SelectionStyle.r(SelectionStyle.COLOR_HOVER_BLOCK_STROKE),
+                SelectionStyle.g(SelectionStyle.COLOR_HOVER_BLOCK_STROKE),
+                SelectionStyle.b(SelectionStyle.COLOR_HOVER_BLOCK_STROKE),
+                SelectionStyle.a(SelectionStyle.COLOR_HOVER_BLOCK_STROKE)
+            );
             RenderCompat.endLastBatch(bufferSource);
+            return;
         }
 
         // 2. Render Box Creation Preview when dragging to create
@@ -82,14 +95,47 @@ public class GhostGizmoRenderer {
                     bMax.getX() + 1.0 - camPos.x, bMax.getY() + 1.0 - camPos.y, bMax.getZ() + 1.0 - camPos.z
                 );
                 boolean oversized = boxCreate.isOversized();
-                float cr = oversized ? 1.0f : 0.0f;
-                float cg = oversized ? 0.2f : 1.0f;
-                float cb = oversized ? 0.0f : 0.33f;
-                float fillAlpha = oversized ? 0.3f : 0.25f;
+                int strokeColor = oversized ? SelectionStyle.COLOR_BOX_CREATE_OVERSIZED_STROKE : SelectionStyle.COLOR_BOX_CREATE_NORMAL_STROKE;
+                int fillColor = oversized ? SelectionStyle.COLOR_BOX_CREATE_OVERSIZED_FILL : SelectionStyle.COLOR_BOX_CREATE_NORMAL_FILL;
 
-                RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, createBox, cr, cg, cb, fillAlpha);
-                VertexConsumer lineBuffer = bufferSource.getBuffer(com.mozi1924.yefira.client.render.YefiraRenderTypes.selectionLines());
-                RenderCompat.renderLineBox(poseStack, lineBuffer, createBox, cr, cg, cb, 1.0f);
+                RenderCompat.renderSelectionFilledBox(
+                    poseStack, bufferSource, createBox,
+                    SelectionStyle.r(fillColor),
+                    SelectionStyle.g(fillColor),
+                    SelectionStyle.b(fillColor),
+                    SelectionStyle.a(fillColor)
+                );
+                VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.gizmoLines());
+                RenderCompat.renderLineBox(
+                    poseStack, lineBuffer, createBox,
+                    SelectionStyle.r(strokeColor),
+                    SelectionStyle.g(strokeColor),
+                    SelectionStyle.b(strokeColor),
+                    SelectionStyle.a(strokeColor)
+                );
+
+                // Corner indicators
+                double pt = 0.08;
+                AABB startPoint = new AABB(
+                    bMin.getX() + 0.5 - camPos.x - pt, bMin.getY() + 0.5 - camPos.y - pt, bMin.getZ() + 0.5 - camPos.z - pt,
+                    bMin.getX() + 0.5 - camPos.x + pt, bMin.getY() + 0.5 - camPos.y + pt, bMin.getZ() + 0.5 - camPos.z + pt
+                );
+                int cStart = SelectionStyle.COLOR_BOX_CREATE_CORNER_START;
+                RenderCompat.renderGizmoFilledBox(
+                    poseStack, bufferSource, startPoint,
+                    SelectionStyle.r(cStart), SelectionStyle.g(cStart), SelectionStyle.b(cStart), 1.0f
+                );
+
+                int cEnd = oversized ? SelectionStyle.COLOR_BOX_CREATE_CORNER_END_OVERSIZED : SelectionStyle.COLOR_BOX_CREATE_CORNER_END;
+                AABB endPoint = new AABB(
+                    bMax.getX() + 0.5 - camPos.x - pt, bMax.getY() + 0.5 - camPos.y - pt, bMax.getZ() + 0.5 - camPos.z - pt,
+                    bMax.getX() + 0.5 - camPos.x + pt, bMax.getY() + 0.5 - camPos.y + pt, bMax.getZ() + 0.5 - camPos.z + pt
+                );
+                RenderCompat.renderGizmoFilledBox(
+                    poseStack, bufferSource, endPoint,
+                    SelectionStyle.r(cEnd), SelectionStyle.g(cEnd), SelectionStyle.b(cEnd), 1.0f
+                );
+
                 RenderCompat.endLastBatch(bufferSource);
             }
             return;
@@ -147,9 +193,9 @@ public class GhostGizmoRenderer {
         }
 
         // Pass 2: Render Always-On-Top Lines (Center box wireframes & 3D Axis Arrows)
-        VertexConsumer lineBuffer = bufferSource.getBuffer(com.mozi1924.yefira.client.render.YefiraRenderTypes.gizmoLines());
+        VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.gizmoLines());
         for (GizmoData gizmo : gizmos) {
-            LevelRenderer.renderLineBox(poseStack, lineBuffer, gizmo.centerBox, gizmo.cr, gizmo.cg, gizmo.cb, 1.0f);
+            RenderCompat.renderLineBox(poseStack, lineBuffer, gizmo.centerBox, gizmo.cr, gizmo.cg, gizmo.cb, 1.0f);
 
             // X Axis (Red)
             drawAxisArrow(poseStack, lineBuffer, gizmo.relOrigin, new Vec3(1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1), gizmo.axisLength, gizmo.colorX);
@@ -159,7 +205,6 @@ public class GhostGizmoRenderer {
             drawAxisArrow(poseStack, lineBuffer, gizmo.relOrigin, new Vec3(0, 0, 1), new Vec3(1, 0, 0), new Vec3(0, 1, 0), gizmo.axisLength, gizmo.colorZ);
         }
 
-        // Flush gizmo batch immediately so it renders Always-On-Top without delay
         RenderCompat.endLastBatch(bufferSource);
     }
 
@@ -167,8 +212,8 @@ public class GhostGizmoRenderer {
         GhostModeManager ghost = GhostModeManager.getInstance();
         Vec3 cameraPos = ghost.getCameraPos();
         double dist = Math.max(0.5, origin.distanceTo(cameraPos));
-        float axisLength = (float) (dist * 0.15);
-        float centerHalf = (float) (dist * 0.020);
+        float axisLength = (float) (dist * SelectionStyle.HANDLE_AXIS_RATIO);
+        float centerHalf = (float) (dist * SelectionStyle.HANDLE_CENTER_RATIO);
 
         int hoveredCorner = ghost.getHoveredCorner();
         int hoveredAxis = ghost.getHoveredAxis();
@@ -186,9 +231,9 @@ public class GhostGizmoRenderer {
             relOrigin.x - centerHalf, relOrigin.y - centerHalf, relOrigin.z - centerHalf,
             relOrigin.x + centerHalf, relOrigin.y + centerHalf, relOrigin.z + centerHalf
         );
-        float cr = ((centerColor >> 16) & 0xFF) / 255.0f;
-        float cg = ((centerColor >> 8) & 0xFF) / 255.0f;
-        float cb = (centerColor & 0xFF) / 255.0f;
+        float cr = SelectionStyle.r(centerColor);
+        float cg = SelectionStyle.g(centerColor);
+        float cb = SelectionStyle.b(centerColor);
 
         // X Axis (Red)
         boolean xHighlighted = isCurrentCorner && ((draggingCorner != GhostModeManager.CORNER_NONE ? draggingAxis : hoveredAxis) == GhostModeManager.AXIS_X);
@@ -209,8 +254,8 @@ public class GhostGizmoRenderer {
         GhostModeManager ghost = GhostModeManager.getInstance();
         Vec3 cameraPos = ghost.getCameraPos();
         double dist = Math.max(0.5, center.distanceTo(cameraPos));
-        float axisLength = (float) (dist * 0.15);
-        float centerHalf = (float) (dist * 0.024);
+        float axisLength = (float) (dist * SelectionStyle.HANDLE_AXIS_RATIO);
+        float centerHalf = (float) (dist * SelectionStyle.HANDLE_CENTER_RATIO);
 
         int hoveredCorner = ghost.getHoveredCorner();
         int hoveredAxis = ghost.getHoveredAxis();
@@ -229,9 +274,9 @@ public class GhostGizmoRenderer {
             relCenter.x - centerHalf, relCenter.y - centerHalf, relCenter.z - centerHalf,
             relCenter.x + centerHalf, relCenter.y + centerHalf, relCenter.z + centerHalf
         );
-        float cr = ((centerColor >> 16) & 0xFF) / 255.0f;
-        float cg = ((centerColor >> 8) & 0xFF) / 255.0f;
-        float cb = (centerColor & 0xFF) / 255.0f;
+        float cr = SelectionStyle.r(centerColor);
+        float cg = SelectionStyle.g(centerColor);
+        float cb = SelectionStyle.b(centerColor);
 
         // X Axis
         boolean xHighlighted = isCenterGizmo && ((draggingCorner != GhostModeManager.CORNER_NONE ? draggingAxis : hoveredAxis) == GhostModeManager.AXIS_X);
@@ -283,10 +328,10 @@ public class GhostGizmoRenderer {
     }
 
     private static void drawLine(PoseStack poseStack, VertexConsumer lines, Vec3 p1, Vec3 p2, int argb) {
-        float a = ((argb >> 24) & 0xFF) / 255.0f;
-        float r = ((argb >> 16) & 0xFF) / 255.0f;
-        float g = ((argb >> 8) & 0xFF) / 255.0f;
-        float b = (argb & 0xFF) / 255.0f;
+        float a = SelectionStyle.a(argb);
+        float r = SelectionStyle.r(argb);
+        float g = SelectionStyle.g(argb);
+        float b = SelectionStyle.b(argb);
 
         RenderCompat.drawGizmoLine(poseStack, lines, p1, p2, r, g, b, a);
     }

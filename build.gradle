@@ -90,6 +90,19 @@ registerVersionExec('build121', '1.21.1', 21, 'build', 'Builds Minecraft 1.21.1 
 registerVersionExec('build1214', '1.21.4', 21, 'build', 'Builds Minecraft 1.21.4 artifacts (Fabric & NeoForge)')
 registerVersionExec('build26', '26.2', 25, 'build', 'Builds Minecraft 26.2 artifacts (Fabric & NeoForge)')
 
+// Test tasks per version
+registerVersionExec('test120', '1.20.1', 17, 'test', 'Runs tests on Minecraft 1.20.1')
+registerVersionExec('test1204', '1.20.4', 17, 'test', 'Runs tests on Minecraft 1.20.4')
+registerVersionExec('test121', '1.21.1', 21, 'test', 'Runs tests on Minecraft 1.21.1')
+registerVersionExec('test1214', '1.21.4', 21, 'test', 'Runs tests on Minecraft 1.21.4')
+registerVersionExec('test26', '26.2', 25, 'test', 'Runs tests on Minecraft 26.2')
+
+tasks.register('test') {
+    group = 'verification'
+    description = 'Runs test tasks across all Minecraft versions'
+    dependsOn 'test120', 'test1204', 'test121', 'test1214', 'test26'
+}
+
 // Run Client tasks
 registerVersionExec('run120FabricClient', '1.20.1', 17, ':fabric:runClient', 'Runs Minecraft 1.20.1 Fabric Client')
 registerVersionExec('run120ForgeClient', '1.20.1', 17, ':forge:runClient', 'Runs Minecraft 1.20.1 Forge Client')

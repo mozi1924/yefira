@@ -6,6 +6,7 @@ import com.mozi1924.yefira.client.compat.RenderCompat;
 import com.mozi1924.yefira.client.ghost.GhostModeManager;
 import com.mozi1924.yefira.selection.SelectionBox;
 import com.mozi1924.yefira.selection.SelectionManager;
+import com.mozi1924.yefira.selection.SelectionStyle;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -53,46 +54,87 @@ public class SelectionBoxRenderer {
                 );
             }
         }
-
         boolean isOversized = selection.isOversized();
         boolean previewOversized = previewSel != null && previewSel.isOversized();
 
         // Pass 1: Translucent fills (depth test on, depth write off, no culling)
         if (isOversized) {
-            // Alert Red Fill (1.0f, 0.1f, 0.1f, 0.25f)
-            RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, box, 1.0f, 0.1f, 0.1f, 0.25f);
+            RenderCompat.renderSelectionFilledBox(
+                poseStack, bufferSource, box,
+                SelectionStyle.r(SelectionStyle.COLOR_OVERSIZED_FILL),
+                SelectionStyle.g(SelectionStyle.COLOR_OVERSIZED_FILL),
+                SelectionStyle.b(SelectionStyle.COLOR_OVERSIZED_FILL),
+                SelectionStyle.a(SelectionStyle.COLOR_OVERSIZED_FILL)
+            );
         } else {
-            // Bright Cyan Fill (0.0f, 1.0f, 1.0f, 0.2f)
-            RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, box, 0.0f, 1.0f, 1.0f, 0.2f);
+            RenderCompat.renderSelectionFilledBox(
+                poseStack, bufferSource, box,
+                SelectionStyle.r(SelectionStyle.COLOR_NORMAL_FILL),
+                SelectionStyle.g(SelectionStyle.COLOR_NORMAL_FILL),
+                SelectionStyle.b(SelectionStyle.COLOR_NORMAL_FILL),
+                SelectionStyle.a(SelectionStyle.COLOR_NORMAL_FILL)
+            );
         }
 
         if (previewBox != null) {
             if (previewOversized) {
-                // Alert Red-Orange Fill (1.0f, 0.2f, 0.0f, 0.3f)
-                RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, previewBox, 1.0f, 0.2f, 0.0f, 0.3f);
+                RenderCompat.renderSelectionFilledBox(
+                    poseStack, bufferSource, previewBox,
+                    SelectionStyle.r(SelectionStyle.COLOR_PREVIEW_OVERSIZED_FILL),
+                    SelectionStyle.g(SelectionStyle.COLOR_PREVIEW_OVERSIZED_FILL),
+                    SelectionStyle.b(SelectionStyle.COLOR_PREVIEW_OVERSIZED_FILL),
+                    SelectionStyle.a(SelectionStyle.COLOR_PREVIEW_OVERSIZED_FILL)
+                );
             } else {
-                // Translucent Green Fill (0.0f, 1.0f, 0.0f, 0.25f)
-                RenderCompat.renderSelectionFilledBox(poseStack, bufferSource, previewBox, 0.0f, 1.0f, 0.0f, 0.25f);
+                RenderCompat.renderSelectionFilledBox(
+                    poseStack, bufferSource, previewBox,
+                    SelectionStyle.r(SelectionStyle.COLOR_PREVIEW_NORMAL_FILL),
+                    SelectionStyle.g(SelectionStyle.COLOR_PREVIEW_NORMAL_FILL),
+                    SelectionStyle.b(SelectionStyle.COLOR_PREVIEW_NORMAL_FILL),
+                    SelectionStyle.a(SelectionStyle.COLOR_PREVIEW_NORMAL_FILL)
+                );
             }
         }
 
-        // Pass 2: Line strokes (depth test on, depth write off)
-        VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.selectionLines());
+        // Pass 2: Line strokes (depth test on, depth write off, matching 26.2 stroke widths)
         if (isOversized) {
-            // Alert Red Stroke (1.0f, 0.15f, 0.15f, 0.95f)
-            RenderCompat.renderLineBox(poseStack, lineBuffer, box, 1.0f, 0.15f, 0.15f, 0.95f);
+            VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.selectionLinesThick());
+            RenderCompat.renderLineBox(
+                poseStack, lineBuffer, box,
+                SelectionStyle.r(SelectionStyle.COLOR_OVERSIZED_STROKE),
+                SelectionStyle.g(SelectionStyle.COLOR_OVERSIZED_STROKE),
+                SelectionStyle.b(SelectionStyle.COLOR_OVERSIZED_STROKE),
+                SelectionStyle.a(SelectionStyle.COLOR_OVERSIZED_STROKE)
+            );
         } else {
-            // Bright Cyan Stroke (0.0f, 1.0f, 1.0f, 0.9f)
-            RenderCompat.renderLineBox(poseStack, lineBuffer, box, 0.0f, 1.0f, 1.0f, 0.9f);
+            VertexConsumer lineBuffer = bufferSource.getBuffer(YefiraRenderTypes.selectionLinesNormal());
+            RenderCompat.renderLineBox(
+                poseStack, lineBuffer, box,
+                SelectionStyle.r(SelectionStyle.COLOR_NORMAL_STROKE),
+                SelectionStyle.g(SelectionStyle.COLOR_NORMAL_STROKE),
+                SelectionStyle.b(SelectionStyle.COLOR_NORMAL_STROKE),
+                SelectionStyle.a(SelectionStyle.COLOR_NORMAL_STROKE)
+            );
         }
 
         if (previewBox != null) {
+            VertexConsumer previewLineBuffer = bufferSource.getBuffer(YefiraRenderTypes.selectionLinesThick());
             if (previewOversized) {
-                // Alert Red-Orange Stroke (1.0f, 0.2f, 0.0f, 0.95f)
-                RenderCompat.renderLineBox(poseStack, lineBuffer, previewBox, 1.0f, 0.2f, 0.0f, 0.95f);
+                RenderCompat.renderLineBox(
+                    poseStack, previewLineBuffer, previewBox,
+                    SelectionStyle.r(SelectionStyle.COLOR_PREVIEW_OVERSIZED_STROKE),
+                    SelectionStyle.g(SelectionStyle.COLOR_PREVIEW_OVERSIZED_STROKE),
+                    SelectionStyle.b(SelectionStyle.COLOR_PREVIEW_OVERSIZED_STROKE),
+                    SelectionStyle.a(SelectionStyle.COLOR_PREVIEW_OVERSIZED_STROKE)
+                );
             } else {
-                // Bright Lime Green Stroke (0.0f, 1.0f, 0.0f, 0.9f)
-                RenderCompat.renderLineBox(poseStack, lineBuffer, previewBox, 0.0f, 1.0f, 0.0f, 0.9f);
+                RenderCompat.renderLineBox(
+                    poseStack, previewLineBuffer, previewBox,
+                    SelectionStyle.r(SelectionStyle.COLOR_PREVIEW_NORMAL_STROKE),
+                    SelectionStyle.g(SelectionStyle.COLOR_PREVIEW_NORMAL_STROKE),
+                    SelectionStyle.b(SelectionStyle.COLOR_PREVIEW_NORMAL_STROKE),
+                    SelectionStyle.a(SelectionStyle.COLOR_PREVIEW_NORMAL_STROKE)
+                );
             }
         }
 

@@ -1,21 +1,13 @@
 package com.mozi1924.yefira.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
-import com.mozi1924.yefira.Yefira;
 import com.mozi1924.yefira.client.compat.KeyMappingCompat;
 import com.mozi1924.yefira.client.ghost.GhostModeManager;
 import com.mozi1924.yefira.client.gui.YefiraScreen;
-import com.mozi1924.yefira.compat.ClientThread;
-import com.mozi1924.yefira.config.YefiraConfig;
-import com.mozi1924.yefira.network.WebSocketServerManager;
-import com.mozi1924.yefira.selection.SelectionManager;
-import com.mozi1924.yefira.selection.SelectionStorageManager;
+import com.mozi1924.yefira.compat.CommonClientHooks;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ServerData;
 import org.lwjgl.glfw.GLFW;
-
-import java.nio.file.Path;
 
 public class YefiraClient {
 
@@ -29,7 +21,6 @@ public class YefiraClient {
 
     public static void init() {
     }
-
 
     public static void createKeyMappings() {
         keyGhostMode = KeyMappingCompat.createKeyMapping(
@@ -63,7 +54,7 @@ public class YefiraClient {
         keyPresetBox = KeyMappingCompat.createKeyMapping(
             "key.yefira.preset_box",
             InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_B,
+            GLFW.GLFW_KEY_C,
             YEFIRA_CATEGORY
         );
     }
@@ -72,40 +63,15 @@ public class YefiraClient {
         if (GhostModeManager.getInstance().isActive()) {
             GhostModeManager.getInstance().disable();
         }
-        // Local export mode scans ClientLevel chunks on the client thread.
-        ClientThread.setExecutor(client::execute);
-        boolean multi = !client.hasSingleplayerServer();
-        SelectionManager.getInstance().setSelectionSource(multi
-                ? SelectionManager.SelectionSource.LOCAL_CLIENT
-                : SelectionManager.SelectionSource.SERVER_AUTHORITATIVE);
-        if (multi) {
-            ServerData serverData = client.getCurrentServer();
-            if (serverData != null && serverData.ip != null) {
-                Path serverPath = SelectionStorageManager.getServerStoragePath(serverData.ip);
-                boolean loaded = SelectionManager.getInstance().loadSavedSelection(serverPath, client.level);
-                if (loaded) {
-                    Yefira.LOGGER.info("Loaded server selection for IP: {}", serverData.ip);
-                }
-            }
-            // Remote multiplayer: local WebSocket auto-start stays disabled, but
-            // the user can start it manually from the GUI to export the loaded
-            // client-side chunks without server save access.
-            Yefira.LOGGER.info(
-                "Remote server detected; local WebSocket auto-start is disabled. "
-                    + "Start it from the GUI for local export, or connect the DCC to the server's endpoint.");
-        }
+        String serverIp = (client.getCurrentServer() != null) ? client.getCurrentServer().ip : null;
+        CommonClientHooks.onClientJoin(client::execute, client.hasSingleplayerServer(), serverIp, client.level);
     }
 
     public static void onClientDisconnectServer(Minecraft client) {
         if (GhostModeManager.getInstance().isActive()) {
             GhostModeManager.getInstance().disable();
         }
-        ClientThread.clear();
-        SelectionManager.getInstance().setSelectionSource(SelectionManager.SelectionSource.SERVER_AUTHORITATIVE);
-        if (!client.hasSingleplayerServer()) {
-            SelectionManager.getInstance().clearSelection();
-            WebSocketServerManager.getInstance().stopServer();
-        }
+        CommonClientHooks.onClientDisconnect(client.hasSingleplayerServer());
     }
 
     public static void onClientTick(Minecraft client) {

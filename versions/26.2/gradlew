@@ -117,22 +117,29 @@ esac
 
 
 # Auto-detect matching JDK for this branch if JAVA_HOME is not explicitly set
-if [ -z "$JAVA_HOME" ] && [ -f "$APP_HOME/gradle.properties" ]; then
-    REQ_JAVA=$(grep "^java_version=" "$APP_HOME/gradle.properties" 2>/dev/null | cut -d'=' -f2 | tr -d ' \r\n')
-    if [ "$REQ_JAVA" = "21" ]; then
-        for candidate in "$HOME"/.gradle/jdks/*21* /usr/lib/jvm/*21*; do
-            if [ -x "$candidate/bin/java" ]; then
-                JAVA_HOME="$candidate"
-                break
-            fi
-        done
-    elif [ "$REQ_JAVA" = "17" ]; then
-        for candidate in /usr/lib/jvm/*17* "$HOME"/.gradle/jdks/*17*; do
-            if [ -x "$candidate/bin/java" ]; then
-                JAVA_HOME="$candidate"
-                break
-            fi
-        done
+if [ -z "$JAVA_HOME" ]; then
+    REQ_JAVA=""
+    if [ -f "$APP_HOME/gradle.properties" ]; then
+        REQ_JAVA=$(grep "^java_version=" "$APP_HOME/gradle.properties" 2>/dev/null | cut -d'=' -f2 | tr -d ' \r\n')
+    fi
+    [ -z "$REQ_JAVA" ] && REQ_JAVA="21"
+
+    # Search candidates in ~/.gradle/jdks and system directories
+    for cand in "$HOME"/.gradle/jdks/*"${REQ_JAVA}"*/* "$HOME"/.gradle/jdks/*"${REQ_JAVA}"* /usr/lib/jvm/*"${REQ_JAVA}"*; do
+        if [ -x "$cand/Contents/Home/bin/java" ]; then
+            JAVA_HOME="$cand/Contents/Home"
+            break
+        elif [ -x "$cand/bin/java" ]; then
+            JAVA_HOME="$cand"
+            break
+        fi
+    done
+
+    # Fallback to /usr/libexec/java_home on macOS
+    if [ -z "$JAVA_HOME" ] && [ "$darwin" = "true" ]; then
+        if /usr/libexec/java_home -v "$REQ_JAVA" >/dev/null 2>&1; then
+            JAVA_HOME=$(/usr/libexec/java_home -v "$REQ_JAVA")
+        fi
     fi
 fi
 

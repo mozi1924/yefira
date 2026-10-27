@@ -10,7 +10,7 @@ import java.util.OptionalDouble;
 /**
  * Custom RenderTypes for Yefira client rendering.
  * Provides Always-On-Top rendering for 3D Gizmos and
- * non-depth-writing translucent rendering for selection boxes to prevent occlusion.
+ * non-depth-writing translucent rendering for selection boxes to prevent occlusion and z-fighting.
  */
 public class YefiraRenderTypes extends RenderType {
 
@@ -23,7 +23,8 @@ public class YefiraRenderTypes extends RenderType {
     private static final RenderType GIZMO_LINES = createGizmoLines();
     private static final RenderType GIZMO_FILLED_BOX = createGizmoFilledBox();
     private static final RenderType SELECTION_FILLED_BOX = createSelectionFilledBox();
-    private static final RenderType SELECTION_LINES = createSelectionLines();
+    private static final RenderType SELECTION_LINES_NORMAL = createSelectionLines(2.0);
+    private static final RenderType SELECTION_LINES_THICK = createSelectionLines(2.5);
 
     public static RenderType gizmoLines() {
         return GIZMO_LINES;
@@ -37,8 +38,12 @@ public class YefiraRenderTypes extends RenderType {
         return SELECTION_FILLED_BOX;
     }
 
-    public static RenderType selectionLines() {
-        return SELECTION_LINES;
+    public static RenderType selectionLinesNormal() {
+        return SELECTION_LINES_NORMAL;
+    }
+
+    public static RenderType selectionLinesThick() {
+        return SELECTION_LINES_THICK;
     }
 
     private static RenderType createGizmoLines() {
@@ -131,8 +136,8 @@ public class YefiraRenderTypes extends RenderType {
         );
     }
 
-    private static RenderType createSelectionLines() {
-        RenderStateShard.LineStateShard lineState = new RenderStateShard.LineStateShard(OptionalDouble.of(2.5));
+    private static RenderType createSelectionLines(double lineWidth) {
+        RenderStateShard.LineStateShard lineState = new RenderStateShard.LineStateShard(OptionalDouble.of(lineWidth));
         Runnable setup = () -> {
             RENDERTYPE_LINES_SHADER.setupRenderState();
             lineState.setupRenderState();
@@ -152,7 +157,7 @@ public class YefiraRenderTypes extends RenderType {
             RENDERTYPE_LINES_SHADER.clearRenderState();
         };
         return new YefiraRenderTypes(
-            "yefira_selection_lines",
+            "yefira_selection_lines_" + (int)(lineWidth * 10),
             DefaultVertexFormat.POSITION_COLOR_NORMAL,
             VertexFormat.Mode.LINES,
             1536,
