@@ -3,17 +3,32 @@
 [![Fabric](https://img.shields.io/badge/Fabric-1.20.1%20%7C%201.20.4%20%7C%201.21.1%20%7C%201.21.4%20%7C%2026.2-blue.svg)](https://fabricmc.net/)
 [![Forge](https://img.shields.io/badge/Forge-1.20.1-orange.svg)](https://files.minecraftforge.net/)
 [![NeoForge](https://img.shields.io/badge/NeoForge-1.20.4%20%7C%201.21.1%20%7C%201.21.4%20%7C%2026.2-orange.svg)](https://neoforged.net/)
-[![Build CI](https://github.com/mozi1924/mc-sync-blender/actions/workflows/build.yml/badge.svg)](https://github.com/mozi1924/mc-sync-blender/actions/workflows/build.yml)
+[![Build CI](https://github.com/mozi1924/yefira/actions/workflows/build.yml/badge.svg)](https://github.com/mozi1924/yefira/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](LICENSE)
-[![Blender](https://img.shields.io/badge/Companion-MoziToolKit-green.svg)](https://github.com/mozi1924/MoziToolKit)
+[![DCC Frontend: MoziToolKit](https://img.shields.io/badge/DCC%20Frontend-MoziToolKit-orange.svg)](https://github.com/mozi1924/MoziToolKit)
+[![Core: libmtk](https://img.shields.io/badge/Core-libmozitoolkit%20(Rust)-red.svg)](https://github.com/mozi1924/libmozitoolkit)
 
 **Yefira** 是专为 **Minecraft** 与 **Blender ([MoziToolKit](https://github.com/mozi1924/MoziToolKit))** 打造的高性能、低延迟实时双向同步模组。
 
-通过内置轻量化 WebSocket 通信架构与高频方块状态编码器，Yefira 能够将游戏内指定 3D 选区的方块数据、增量变化实时推送至 Blender 视口中构建三维点云与模型；同时支持类似 Blender 视口的 Ghost 模式自由漫游与射线选区操作。
+作为 **MoziToolKit 协同生态** 的 Minecraft 事实源端，通过内置轻量化 WebSocket 通信架构与高频方块状态编码器，Yefira 能够将游戏内指定 3D 选区的权威方块数据、增量变化实时推送至 Blender 视口中构建三维点云与模型；底层由通用 Rust 引擎 [**`libmozitoolkit`**](https://github.com/mozi1924/libmozitoolkit) 接管高效二进制流解包与增量网格化；同时支持类似 Blender 视口的 Ghost 模式自由漫游与射线选区操作。
 
 > **权威协议规范**：服务端与 DCC 客户端之间的二进制帧、`state_hash`、基线/增量状态机、
 > 资源硬限与错误恢复契约，以
-> **[RFC v3.1: MTK 2.0 Live Sync 协议与架构设计规范](../MoziToolKit/docs/live_sync/live_sync_protocol.md)** 为准。
+> **[RFC v3.1: MTK 2.0 Live Sync 协议与架构设计规范](https://github.com/mozi1924/MoziToolKit/blob/main/docs/live_sync/live_sync_protocol.md)** 为准。
+
+---
+
+## 🌐 三位一体协同生态体系 (Three-Pillar Architecture)
+
+Yefira 作为 Minecraft 端服务端/客户端伴生模组，与生态中的其他两大核心工程协同联动：
+
+| 工程与角色 | 职责定位 | 技术栈与边界 | 仓库链接 |
+| :--- | :--- | :--- | :---: |
+| **[`MoziToolKit`](https://github.com/mozi1924/MoziToolKit)**<br>*(DCC 插件前端)* | **Blender 宿主界面与场景装配**<br>提供 3D 视图侧边栏面板、操作符、规范 PBR 材质节点树生成、点云伴生管理及视口实时渲染调度。 | Python 3.11+<br>Blender 5.0+ Extension | [🔗 GitHub](https://github.com/mozi1924/MoziToolKit) |
+| **[`libmozitoolkit`](https://github.com/mozi1924/libmozitoolkit)**<br>*(Rust 核心引擎 `libmtk`)* | **无头高性能几何与体素计算底座**<br>负责体素流解析、1.21+ 方块模型烘焙、邻域面遮挡剔除、2D 矩形装箱、66 种原版 Biome 调色板与 DNA 内存直灌。 | Rust 2021<br>PyO3 / ABI3 / WASM | [🔗 GitHub](https://github.com/mozi1924/libmozitoolkit) |
+| **`yefira`**<br>*(Minecraft 伴生模组，本仓库)* | **服务端权威体素扫描与实时协同**<br>通过 WebSocket 全双工流推送三维选区与增量体素数据，支持 XXHash64 校验自愈与幽灵漫游模式。 | Java 17/21/25<br>Fabric / Forge / NeoForge | **当前仓库** |
+
+---
 
 ---
 
