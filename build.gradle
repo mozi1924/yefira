@@ -7,6 +7,19 @@ plugins {
 ext.isWindows = Os.isFamily(Os.FAMILY_WINDOWS)
 ext.gradlewCmd = ext.isWindows ? 'gradlew.bat' : './gradlew'
 
+// Helper method to check if a JDK directory matches target major version
+def matchesJavaVersion(String path, int ver) {
+    if (!path) return false
+    File releaseFile = new File(path, 'release')
+    if (releaseFile.exists()) {
+        def match = (releaseFile.text =~ /JAVA_VERSION="?(\d+)/)
+        if (match) {
+            return Integer.parseInt(match[0][1]) == ver
+        }
+    }
+    return path.contains("-${ver}-") || path.contains("jdk-${ver}") || path.contains("java-${ver}")
+}
+
 // Helper method to detect appropriate JAVA_HOME for a target Java version
 def findJavaHome(int targetVersion) {
     def envVar = "JAVA_${targetVersion}_HOME"
@@ -35,21 +48,50 @@ def findJavaHome(int targetVersion) {
         }
     }
 
-    // 2. macOS /usr/libexec/java_home
+    // 2. macOS /usr/libexec/java_home (verify version matches, as macOS falls back to highest JDK if not found)
     if (Os.isFamily(Os.FAMILY_MAC)) {
         try {
             def proc = ["/usr/libexec/java_home", "-v", "${targetVersion}"].execute()
             proc.waitFor()
             if (proc.exitValue() == 0) {
                 def out = proc.text.trim()
-                if (out && new File(out).exists()) {
+                if (out && new File(out).exists() && matchesJavaVersion(out, targetVersion)) {
                     return out
                 }
             }
         } catch (Exception ignored) {}
     }
 
-    // 3. Common Linux / system candidates
+    // 3. PrismLauncher runtimes (macOS & Linux)
+    if (userHome) {
+        def prismJavaMap = [
+            17: ['java-runtime-gamma', 'azul_zulu_jre17.0.20'],
+            21: ['java-runtime-delta'],
+            25: ['java-runtime-epsilon']
+        ]
+        def prismBases = [
+            new File(userHome, 'Library/Application Support/PrismLauncher/java'),
+            new File(userHome, '.local/share/PrismLauncher/java')
+        ]
+        for (File pBase : prismBases) {
+            if (pBase.isDirectory() && prismJavaMap.containsKey(targetVersion)) {
+                for (String candidate : prismJavaMap[targetVersion]) {
+                    def cDir = new File(pBase, candidate)
+                    if (cDir.isDirectory()) {
+                        def macHome = new File(cDir, 'jre.bundle/Contents/Home')
+                        if (macHome.isDirectory()) return macHome.absolutePath
+                        def macHomeJdk = new File(cDir, 'Contents/Home')
+                        if (macHomeJdk.isDirectory()) return macHomeJdk.absolutePath
+                        if (new File(cDir, project.ext.isWindows ? 'bin/java.exe' : 'bin/java').exists()) {
+                            return cDir.absolutePath
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Common Linux / system candidates
     def candidates = [
         17: ['/usr/lib/jvm/java-17-temurin-jdk', '/usr/lib/jvm/temurin-17-jdk', '/usr/lib/jvm/java-17-openjdk'],
         21: ['/usr/lib/jvm/java-21-openjdk', '/usr/lib/jvm/temurin-21-jdk'],

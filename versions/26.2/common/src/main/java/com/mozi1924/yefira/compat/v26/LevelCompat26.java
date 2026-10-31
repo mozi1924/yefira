@@ -154,7 +154,7 @@ public class LevelCompat26 implements ILevelCompat {
             if (layers != null) {
                 for (var layer : layers.layers()) {
                     String pat = layer.pattern().unwrapKey()
-                            .map(k -> k.location().getPath())
+                            .map(k -> k.identifier().getPath())
                             .orElseGet(() -> layer.pattern().getRegisteredName());
                     String col = layer.color().getName();
                     patterns.add(new String[]{pat, col});
