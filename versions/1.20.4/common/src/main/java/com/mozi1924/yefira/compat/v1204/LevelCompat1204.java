@@ -138,6 +138,21 @@ public class LevelCompat1204 implements ILevelCompat {
                     skinBase64
             );
         }
+        if (be instanceof net.minecraft.world.level.block.entity.BannerBlockEntity banner) {
+            String baseColor = banner.getBaseColor() != null ? banner.getBaseColor().getName() : "white";
+            java.util.List<String[]> patterns = new java.util.ArrayList<>();
+            var list = banner.getPatterns();
+            if (list != null) {
+                for (var pair : list) {
+                    String pat = pair.getFirst().unwrapKey()
+                            .map(k -> k.location().getPath())
+                            .orElseGet(() -> pair.getFirst().value().getHashname());
+                    String col = pair.getSecond().getName();
+                    patterns.add(new String[]{pat, col});
+                }
+            }
+            return com.mozi1924.yefira.compat.visual.VisualBlockEntity.serializeBanner(baseColor, patterns);
+        }
         return null;
     }
 

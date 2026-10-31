@@ -71,4 +71,24 @@ public class VisualBlockEntityTest {
         Assertions.assertTrue(json.contains("\"rotation\":4"));
         Assertions.assertFalse(json.contains("\"profile\""));
     }
+
+    @Test
+    public void testBannerSerialization() {
+        String jsonPlain = VisualBlockEntity.serializeBanner("red", java.util.Collections.emptyList());
+        Assertions.assertNotNull(jsonPlain);
+        Assertions.assertTrue(jsonPlain.contains("\"id\":\"minecraft:banner\""));
+        Assertions.assertTrue(jsonPlain.contains("\"base_color\":\"red\""));
+        Assertions.assertFalse(jsonPlain.contains("\"patterns\""));
+
+        List<String[]> patterns = List.of(
+                new String[]{"stripe_top", "blue"},
+                new String[]{"flower", "white"}
+        );
+        String jsonPatterned = VisualBlockEntity.serializeBanner("white", patterns);
+        Assertions.assertNotNull(jsonPatterned);
+        Assertions.assertTrue(jsonPatterned.contains("\"id\":\"minecraft:banner\""));
+        Assertions.assertTrue(jsonPatterned.contains("\"base_color\":\"white\""));
+        Assertions.assertTrue(jsonPatterned.contains("{\"pattern\":\"stripe_top\",\"color\":\"blue\"}"));
+        Assertions.assertTrue(jsonPatterned.contains("{\"pattern\":\"flower\",\"color\":\"white\"}"));
+    }
 }

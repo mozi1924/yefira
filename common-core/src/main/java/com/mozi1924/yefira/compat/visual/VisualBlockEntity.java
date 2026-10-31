@@ -44,6 +44,33 @@ public final class VisualBlockEntity {
     }
 
     /**
+     * Serializes a Banner into canonical Visual Semantic NBT JSON.
+     *
+     * @param baseColor Base dye color name (e.g. "red", "white", "black")
+     * @param patterns List of [pattern, color] pairs (e.g. [["stripe_top", "blue"], ["flower", "white"]])
+     */
+    public static String serializeBanner(String baseColor, java.util.List<String[]> patterns) {
+        StringBuilder sb = new StringBuilder(128);
+        sb.append("{\"id\":\"minecraft:banner\"");
+        if (baseColor != null && !baseColor.isEmpty()) {
+            sb.append(",\"base_color\":\"").append(escape(baseColor)).append("\"");
+        }
+        if (patterns != null && !patterns.isEmpty()) {
+            sb.append(",\"patterns\":[");
+            boolean first = true;
+            for (String[] pat : patterns) {
+                if (pat == null || pat.length < 2 || pat[0] == null || pat[1] == null) continue;
+                if (!first) sb.append(",");
+                sb.append("{\"pattern\":\"").append(escape(pat[0])).append("\",\"color\":\"").append(escape(pat[1])).append("\"}");
+                first = false;
+            }
+            sb.append("]");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    /**
      * Serializes a Skull/Head into canonical Visual Semantic NBT JSON.
      *
      * @param kind "skeleton", "wither_skeleton", "zombie", "player", "creeper", "dragon", "piglin"
