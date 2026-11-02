@@ -64,4 +64,25 @@ public class SelectionMathTest {
         SelectionBox longSide = new SelectionBox(new BlockPos(0, 0, 0), new BlockPos(299, 0, 0));
         Assertions.assertTrue(longSide.isOversized(262144L, 256));
     }
+
+    @Test
+    public void testUnalignedQuartGridDimensions() {
+        // e.g. minX = 3, sizeX = 2 -> block 3 (quart 0), block 4 (quart 1) -> 2 quarts
+        int minX = 3;
+        int sizeX = 2;
+        int maxX = minX + sizeX;
+        int minQx = minX >> 2;
+        int maxQx = (maxX - 1) >> 2;
+        int qw = maxQx - minQx + 1;
+        Assertions.assertEquals(2, qw);
+
+        // e.g. minX = 26, sizeX = 83 -> block 26 (quart 6), block 108 (quart 27) -> 22 quarts
+        minX = 26;
+        sizeX = 83;
+        maxX = minX + sizeX;
+        minQx = minX >> 2;
+        maxQx = (maxX - 1) >> 2;
+        qw = maxQx - minQx + 1;
+        Assertions.assertEquals(22, qw);
+    }
 }

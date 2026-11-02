@@ -409,9 +409,17 @@ public class CanonicalVoxelScanner {
         }
 
         // 3. Biome Scan (4x4x4 quart grid)
-        int qw = (sizeX + 3) / 4;
-        int qh = (sizeY + 3) / 4;
-        int qd = (sizeZ + 3) / 4;
+        int minQx = minX >> 2;
+        int maxQx = (maxX - 1) >> 2;
+        int qw = Math.max(0, maxQx - minQx + 1);
+
+        int minQy = minY >> 2;
+        int maxQy = (maxY - 1) >> 2;
+        int qh = Math.max(0, maxQy - minQy + 1);
+
+        int minQz = minZ >> 2;
+        int maxQz = (maxZ - 1) >> 2;
+        int qd = Math.max(0, maxQz - minQz + 1);
         int totalQuarts = qw * qh * qd;
 
         List<String> biomePalette = new ArrayList<>();
@@ -424,19 +432,19 @@ public class CanonicalVoxelScanner {
             if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
                 return null;
             }
-            int wy = minY + (qy * 4);
-            int secY = wy >> 4;
-            int sqy = (wy & 15) >> 2;
+            int worldQy = minQy + qy;
+            int secY = worldQy >> 2;
+            int sqy = worldQy & 3;
 
             for (int qz = 0; qz < qd; qz++) {
-                int wz = minZ + (qz * 4);
-                int secZ = wz >> 4;
-                int sqz = (wz & 15) >> 2;
+                int worldQz = minQz + qz;
+                int secZ = worldQz >> 2;
+                int sqz = worldQz & 3;
 
                 for (int qx = 0; qx < qw; qx++) {
-                    int wx = minX + (qx * 4);
-                    int secX = wx >> 4;
-                    int sqx = (wx & 15) >> 2;
+                    int worldQx = minQx + qx;
+                    int secX = worldQx >> 2;
+                    int sqx = worldQx & 3;
 
                     String biomeStr = getQuartBiome(level, sectionBiomesCache, secX, secY, secZ, sqx, sqy, sqz);
 
