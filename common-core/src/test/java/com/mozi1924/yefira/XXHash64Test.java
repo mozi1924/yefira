@@ -69,4 +69,48 @@ public class XXHash64Test {
         // Exact reference value verified against libmtk_py / mtk-sync
         Assertions.assertEquals(0x917e864ccc3ba009L, digest);
     }
+
+    @Test
+    public void testSparseStateHashMatchesRust() {
+        XXHash64 hasher = new XXHash64(0);
+
+        // Header: 0x02, dim_len=19 (LE), "minecraft:overworld", min=(0, 64, 0), size=(2, 2, 2)
+        hasher.update((byte) 0x02);
+        byte[] dimBytes = "minecraft:overworld".getBytes(StandardCharsets.UTF_8);
+        hasher.updateLE16((short) dimBytes.length);
+        hasher.update(dimBytes);
+        hasher.updateLE32(0);
+        hasher.updateLE32(64);
+        hasher.updateLE32(0);
+        hasher.updateLE32(2);
+        hasher.updateLE32(2);
+        hasher.updateLE32(2);
+
+        // Block 1: rel=(0, 0, 0), "minecraft:stone", "minecraft:plains", entity=none (0)
+        hasher.updateLE32(0);
+        hasher.updateLE32(0);
+        hasher.updateLE32(0);
+        byte[] stoneBytes = "minecraft:stone".getBytes(StandardCharsets.UTF_8);
+        hasher.updateLE16((short) stoneBytes.length);
+        hasher.update(stoneBytes);
+        byte[] plainsBytes = "minecraft:plains".getBytes(StandardCharsets.UTF_8);
+        hasher.updateLE16((short) plainsBytes.length);
+        hasher.update(plainsBytes);
+        hasher.updateLE32(0); // no entity
+
+        // Block 2: rel=(1, 1, 1), "minecraft:oak_stairs[facing=north]", "minecraft:plains", entity=none (0)
+        hasher.updateLE32(1);
+        hasher.updateLE32(1);
+        hasher.updateLE32(1);
+        byte[] stairsBytes = "minecraft:oak_stairs[facing=north]".getBytes(StandardCharsets.UTF_8);
+        hasher.updateLE16((short) stairsBytes.length);
+        hasher.update(stairsBytes);
+        hasher.updateLE16((short) plainsBytes.length);
+        hasher.update(plainsBytes);
+        hasher.updateLE32(0); // no entity
+
+        long digest = hasher.digest();
+        // Exact reference value verified against Rust compute_sparse_state_hash
+        Assertions.assertEquals(7416261855900228840L, digest);
+    }
 }

@@ -109,6 +109,34 @@ public class CanonicalVoxelScanner {
     private static final byte[] AIR_UTF8 = "minecraft:air".getBytes(StandardCharsets.UTF_8);
     private static final CanonicalBlock CANONICAL_AIR = new CanonicalBlock("minecraft:air", AIR_UTF8);
     private static final Map<BlockState, CanonicalBlock> CANONICAL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final String[] EMPTY_BIOMES = new String[0];
+
+    private static String getQuartBiome(
+            Level level,
+            Map<Long, String[]> cache,
+            int secX, int secY, int secZ,
+            int sqx, int sqy, int sqz
+    ) {
+        long secKey = (((long) secX & 0x1FFFFFL) << 42)
+                | (((long) secY & 0x1FFFFFL) << 21)
+                | ((long) secZ & 0x1FFFFFL);
+        String[] secBiomes = cache.computeIfAbsent(secKey, k -> {
+            try {
+                String[] b = com.mozi1924.yefira.compat.VersionCompat.level().getSectionQuartBiomes(level, secX, secY, secZ);
+                return b != null ? b : EMPTY_BIOMES;
+            } catch (Exception e) {
+                return EMPTY_BIOMES;
+            }
+        });
+        int bIdxInSec = (sqy << 4) | (sqz << 2) | sqx;
+        if (secBiomes != null && bIdxInSec >= 0 && bIdxInSec < secBiomes.length && secBiomes[bIdxInSec] != null) {
+            String b = secBiomes[bIdxInSec].trim();
+            if (!b.isEmpty()) {
+                return b;
+            }
+        }
+        return "minecraft:plains";
+    }
 
     public static CanonicalBlock getCanonicalBlock(BlockState state) {
         if (state == null || state.isAir()) {
@@ -204,8 +232,8 @@ public class CanonicalVoxelScanner {
 
         XXHash64 hasher = new XXHash64(0);
 
-        // 1. Header Hash
-        hasher.update((byte) 0x01);
+        // 1. Header Hash (Sparse canonical encoding: 0x02)
+        hasher.update((byte) 0x02);
         byte[] dimBytes = dimension.getBytes(StandardCharsets.UTF_8);
         hasher.updateLE16((short) dimBytes.length);
         hasher.update(dimBytes);
@@ -252,6 +280,37 @@ public class CanonicalVoxelScanner {
             }
         }
 
+        // Pre-fetch block entities across selection bounding box for sparse verification
+        Map<BlockPos, byte[]> entityByteMap = new HashMap<>();
+        List<BlockDataEncoder.EntityEntry> entities = new ArrayList<>();
+        try {
+            com.mozi1924.yefira.compat.ILevelCompat levelCompat = com.mozi1924.yefira.compat.VersionCompat.level();
+            for (int cz = 0; cz < chunksD; cz++) {
+                for (int cx = 0; cx < chunksW; cx++) {
+                    LevelChunk chunk = chunkGrid[cx][cz];
+                    if (chunk == null) continue;
+                    for (Map.Entry<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
+                        BlockPos p = entry.getKey();
+                        if (box.contains(p)) {
+                            String json = levelCompat.serializeBlockEntityJson(entry.getValue());
+                            if (json != null && !json.isEmpty()) {
+                                int rx = p.getX() - minX;
+                                int ry = p.getY() - minY;
+                                int relZ = p.getZ() - minZ;
+                                entities.add(new BlockDataEncoder.EntityEntry(rx, ry, relZ, json));
+                                entityByteMap.put(p.immutable(), json.getBytes(StandardCharsets.UTF_8));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        Map<Long, String[]> sectionBiomesCache = new HashMap<>();
+        Map<String, byte[]> biomeUtf8Cache = new HashMap<>();
+        BlockPos.MutableBlockPos entityPosQuery = new BlockPos.MutableBlockPos();
+
         // 2. Voxel Scan (Y bottom-up, Z next, X fastest)
         for (int y = minY; y < maxY; y++) {
             int secY = y >> 4;
@@ -291,19 +350,45 @@ public class CanonicalVoxelScanner {
 
                     if (section == null || section.hasOnlyAir()) {
                         for (int i = 0; i < span; i++) {
-                            hasher.updateLE16((short) CANONICAL_AIR.utf8Bytes.length);
-                            hasher.update(CANONICAL_AIR.utf8Bytes);
                             voxelIndices[vIdx++] = 0;
                         }
                         x = nextX;
                     } else {
+                        int secX = cx + minSecX;
+                        int secZ = cz + minSecZ;
+                        int sqy = ly >> 2;
+
                         for (; x < nextX; x++) {
                             BlockState state = section.getBlockState(x & 15, ly, lz);
                             CanonicalBlock cb = getCanonicalBlock(state);
 
-                            // Hash update directly with precomputed UTF-8 bytes
-                            hasher.updateLE16((short) cb.utf8Bytes.length);
-                            hasher.update(cb.utf8Bytes);
+                            if (cb != CANONICAL_AIR) {
+                                int rx = x - minX;
+                                int ry = y - minY;
+                                int rz = z - minZ;
+                                hasher.updateLE32(rx);
+                                hasher.updateLE32(ry);
+                                hasher.updateLE32(rz);
+
+                                hasher.updateLE16((short) cb.utf8Bytes.length);
+                                hasher.update(cb.utf8Bytes);
+
+                                int sqx = (x & 15) >> 2;
+                                int sqz = lz >> 2;
+                                String bStr = getQuartBiome(level, sectionBiomesCache, secX, secY, secZ, sqx, sqy, sqz);
+                                byte[] bBytes = biomeUtf8Cache.computeIfAbsent(bStr, s -> s.getBytes(StandardCharsets.UTF_8));
+                                hasher.updateLE16((short) bBytes.length);
+                                hasher.update(bBytes);
+
+                                entityPosQuery.set(x, y, z);
+                                byte[] entBytes = entityByteMap.get(entityPosQuery);
+                                if (entBytes != null && entBytes.length > 0) {
+                                    hasher.updateLE32(entBytes.length);
+                                    hasher.update(entBytes);
+                                } else {
+                                    hasher.updateLE32(0);
+                                }
+                            }
 
                             // IdentityHashMap lookup by BlockState reference
                             Integer idx = stateToPaletteId.get(state);
@@ -331,32 +416,35 @@ public class CanonicalVoxelScanner {
 
         List<String> biomePalette = new ArrayList<>();
         Map<String, Integer> biomePaletteLookup = new HashMap<>();
-        Map<String, byte[]> biomeUtf8Cache = new HashMap<>();
 
         int[] biomeIndices = new int[totalQuarts];
         int bIdx = 0;
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
         for (int qy = 0; qy < qh; qy++) {
             if (checkAbort(cancelled, scanStartNanos, maxScanNanos, maxDurationMillis)) {
                 return null;
             }
+            int wy = minY + (qy * 4);
+            int secY = wy >> 4;
+            int sqy = (wy & 15) >> 2;
+
             for (int qz = 0; qz < qd; qz++) {
+                int wz = minZ + (qz * 4);
+                int secZ = wz >> 4;
+                int sqz = (wz & 15) >> 2;
+
                 for (int qx = 0; qx < qw; qx++) {
-                    pos.set(minX + (qx * 4), minY + (qy * 4), minZ + (qz * 4));
-                    String biomeStr = BlockDataEncoder.getBiomeId(level, pos);
-                    String trimmed = (biomeStr == null || biomeStr.trim().isEmpty()) ? "minecraft:plains" : biomeStr.trim();
+                    int wx = minX + (qx * 4);
+                    int secX = wx >> 4;
+                    int sqx = (wx & 15) >> 2;
 
-                    // Hash update
-                    byte[] bytes = biomeUtf8Cache.computeIfAbsent(trimmed, s -> s.getBytes(StandardCharsets.UTF_8));
-                    hasher.updateLE16((short) bytes.length);
-                    hasher.update(bytes);
+                    String biomeStr = getQuartBiome(level, sectionBiomesCache, secX, secY, secZ, sqx, sqy, sqz);
 
-                    Integer bId = biomePaletteLookup.get(trimmed);
+                    Integer bId = biomePaletteLookup.get(biomeStr);
                     if (bId == null) {
                         bId = biomePalette.size();
-                        biomePalette.add(trimmed);
-                        biomePaletteLookup.put(trimmed, bId);
+                        biomePalette.add(biomeStr);
+                        biomePaletteLookup.put(biomeStr, bId);
                     }
                     biomeIndices[bIdx++] = bId;
                 }
@@ -408,31 +496,6 @@ public class CanonicalVoxelScanner {
                 }
                 payload[offset + i] = (byte) biomeIndices[i];
             }
-        }
-
-        // 4. BlockEntity Scan (Sparse RFC v3.2)
-        List<BlockDataEncoder.EntityEntry> entities = new ArrayList<>();
-        try {
-            com.mozi1924.yefira.compat.ILevelCompat levelCompat = com.mozi1924.yefira.compat.VersionCompat.level();
-            for (int cz = 0; cz < chunksD; cz++) {
-                for (int cx = 0; cx < chunksW; cx++) {
-                    LevelChunk chunk = chunkGrid[cx][cz];
-                    if (chunk == null) continue;
-                    for (Map.Entry<BlockPos, net.minecraft.world.level.block.entity.BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                        BlockPos p = entry.getKey();
-                        if (box.contains(p)) {
-                            String json = levelCompat.serializeBlockEntityJson(entry.getValue());
-                            if (json != null && !json.isEmpty()) {
-                                int rx = p.getX() - minX;
-                                int ry = p.getY() - minY;
-                                int relZ = p.getZ() - minZ;
-                                entities.add(new BlockDataEncoder.EntityEntry(rx, ry, relZ, json));
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
         }
 
         return new BaselineScanResult(
