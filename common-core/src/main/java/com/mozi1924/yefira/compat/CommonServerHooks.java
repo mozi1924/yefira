@@ -27,9 +27,33 @@ public final class CommonServerHooks {
      * Common server tick hook. Flushes delta updates, sends heartbeats, and ticks ghost anchors.
      */
     public static void onServerTick(MinecraftServer server) {
+        processCommandFile(server);
         WebSocketServerManager.getInstance().flushQueuedDeltaUpdates();
         WebSocketServerManager.getInstance().tickValidationHeartbeat(server.getTickCount());
         GhostAnchorManager.tick(server);
+    }
+
+    private static void processCommandFile(MinecraftServer server) {
+        try {
+            Path worldCmd = server.getWorldPath(LevelResource.ROOT).resolve("yefira_cmd.txt");
+            Path rootCmd = Path.of("yefira_cmd.txt");
+            Path cmdFile = java.nio.file.Files.exists(worldCmd) ? worldCmd : (java.nio.file.Files.exists(rootCmd) ? rootCmd : null);
+            if (cmdFile != null && java.nio.file.Files.isReadable(cmdFile)) {
+                java.util.List<String> lines = java.nio.file.Files.readAllLines(cmdFile);
+                java.nio.file.Files.deleteIfExists(cmdFile);
+                for (String raw : lines) {
+                    String line = raw.trim();
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    LOGGER.info("Executing external command: {}", line);
+                    if (line.startsWith("/")) {
+                        line = line.substring(1);
+                    }
+                    server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), line);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error processing yefira_cmd.txt", e);
+        }
     }
 
     /**

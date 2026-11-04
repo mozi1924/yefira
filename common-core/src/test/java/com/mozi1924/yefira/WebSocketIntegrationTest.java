@@ -44,6 +44,16 @@ public class WebSocketIntegrationTest {
         return buf.array();
     }
 
+    private static byte[] pingBytes(long timestamp) {
+        ByteBuffer buf = ByteBuffer.allocate(4 + 8);
+        buf.order(ByteOrder.LITTLE_ENDIAN);
+        buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.MAGIC);
+        buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.PROTOCOL_VERSION);
+        buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.OPCODE_PING);
+        buf.putLong(timestamp);
+        return buf.array();
+    }
+
     @BeforeEach
     public void setUp() throws Exception {
         WebSocketServerManager.getInstance().startServer(TEST_HOST, TEST_PORT);
@@ -220,20 +230,30 @@ public class WebSocketIntegrationTest {
         Assertions.assertEquals(TEST_PORT, server.getPort());
         Assertions.assertEquals(TEST_HOST, server.getHost());
 
-        CompletableFuture<String> pongFuture = new CompletableFuture<>();
+        CompletableFuture<Long> pongFuture = new CompletableFuture<>();
 
         URI uri = new URI("ws://" + TEST_HOST + ":" + TEST_PORT);
         WebSocketClient client = new WebSocketClient(uri) {
             @Override
             public void onOpen(ServerHandshake handshakedata) {
                 send(helloBytes(""));
-                send("PING");
+                send(pingBytes(123456789L));
             }
 
             @Override
-            public void onMessage(String message) {
-                if ("PONG".equalsIgnoreCase(message.trim())) {
-                    pongFuture.complete(message);
+            public void onMessage(String message) {}
+
+            @Override
+            public void onMessage(ByteBuffer bytes) {
+                bytes.order(ByteOrder.LITTLE_ENDIAN);
+                if (bytes.remaining() >= 12) {
+                    byte b0 = bytes.get();
+                    byte b1 = bytes.get();
+                    byte ver = bytes.get();
+                    byte op = bytes.get();
+                    if (b0 == 'M' && b1 == 'T' && ver == 3 && op == com.mozi1924.yefira.encoder.BlockDataEncoder.OPCODE_PONG) {
+                        pongFuture.complete(bytes.getLong());
+                    }
                 }
             }
 
@@ -249,8 +269,8 @@ public class WebSocketIntegrationTest {
         boolean connected = client.connectBlocking(5, TimeUnit.SECONDS);
         Assertions.assertTrue(connected, "Client should connect successfully to WebSocket server");
 
-        String response = pongFuture.get(5, TimeUnit.SECONDS);
-        Assertions.assertEquals("PONG", response);
+        Long response = pongFuture.get(5, TimeUnit.SECONDS);
+        Assertions.assertEquals(123456789L, response);
 
         Thread.sleep(150);
         Assertions.assertTrue(server.getConnectedCount() >= 1, "Server should register HELLO-authenticated client");
@@ -284,9 +304,9 @@ public class WebSocketIntegrationTest {
         client.sendPing();
         Thread.sleep(100);
 
-        // Test safe send while client is alive
-        boolean sent = server.sendSafe(client, "TEST_SAFE_SEND");
-        // Note: client is WebSocketClient not server's WebSocket, test server's safe broadcast/send directly:
+        // Test safe send with null handles gracefully
+        boolean sent = server.sendSafe(null, new byte[4]);
+        Assertions.assertFalse(sent);
         server.broadcastBaseline(null, null); // should safely no-op without crash
 
         // Abrupt close
@@ -295,5 +315,96 @@ public class WebSocketIntegrationTest {
 
         // Server should still be healthy and running
         Assertions.assertTrue(server.isRunning(), "Server should remain running and healthy after client disconnect");
+    }
+
+    @Test
+    public void testUnknownOpcodeReturnsErrorAndDisconnects() throws Exception {
+        WebSocketServerManager server = WebSocketServerManager.getInstance();
+        CompletableFuture<Integer> closeCodeFuture = new CompletableFuture<>();
+        CompletableFuture<Short> errorCodeFuture = new CompletableFuture<>();
+
+        URI uri = new URI("ws://" + TEST_HOST + ":" + TEST_PORT);
+        WebSocketClient client = new WebSocketClient(uri) {
+            @Override
+            public void onOpen(ServerHandshake handshakedata) {
+                // Send unknown opcode 0x99
+                ByteBuffer buf = ByteBuffer.allocate(4);
+                buf.order(ByteOrder.LITTLE_ENDIAN);
+                buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.MAGIC);
+                buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.PROTOCOL_VERSION);
+                buf.put((byte) 0x99);
+                send(buf.array());
+            }
+
+            @Override
+            public void onMessage(String message) {}
+
+            @Override
+            public void onMessage(ByteBuffer bytes) {
+                bytes.order(ByteOrder.LITTLE_ENDIAN);
+                if (bytes.remaining() >= 14) {
+                    byte b0 = bytes.get();
+                    byte b1 = bytes.get();
+                    byte ver = bytes.get();
+                    byte op = bytes.get();
+                    if (b0 == 'M' && b1 == 'T' && ver == 3 && op == com.mozi1924.yefira.encoder.BlockDataEncoder.OPCODE_ERROR) {
+                        bytes.getLong(); // skip epoch
+                        errorCodeFuture.complete(bytes.getShort());
+                    }
+                }
+            }
+
+            @Override
+            public void onClose(int code, String reason, boolean remote) {
+                closeCodeFuture.complete(code);
+            }
+
+            @Override
+            public void onError(Exception ex) {}
+        };
+
+        boolean connected = client.connectBlocking(5, TimeUnit.SECONDS);
+        Assertions.assertTrue(connected);
+
+        short err = errorCodeFuture.get(5, TimeUnit.SECONDS);
+        Assertions.assertEquals(com.mozi1924.yefira.encoder.BlockDataEncoder.ERROR_UNKNOWN_OPCODE, err);
+
+        int closeCode = closeCodeFuture.get(5, TimeUnit.SECONDS);
+        Assertions.assertEquals(1002, closeCode);
+    }
+
+    @Test
+    public void testSyncConfigGatedBeforeAuth() throws Exception {
+        URI uri = new URI("ws://" + TEST_HOST + ":" + TEST_PORT);
+        CompletableFuture<Boolean> opened = new CompletableFuture<>();
+
+        WebSocketClient client = new WebSocketClient(uri) {
+            @Override
+            public void onOpen(ServerHandshake handshakedata) {
+                opened.complete(true);
+                // Send SYNC_CONFIG without HELLO
+                ByteBuffer buf = ByteBuffer.allocate(4 + 3);
+                buf.order(ByteOrder.LITTLE_ENDIAN);
+                buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.MAGIC);
+                buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.PROTOCOL_VERSION);
+                buf.put(com.mozi1924.yefira.encoder.BlockDataEncoder.OPCODE_SYNC_CONFIG);
+                buf.put((byte) 2); // throttleMode
+                buf.put((byte) 30); // fps
+                buf.put((byte) 1); // active
+                send(buf.array());
+            }
+
+            @Override public void onMessage(String message) {}
+            @Override public void onClose(int code, String reason, boolean remote) {}
+            @Override public void onError(Exception ex) {}
+        };
+
+        client.connectBlocking(5, TimeUnit.SECONDS);
+        opened.get(5, TimeUnit.SECONDS);
+        Thread.sleep(150);
+
+        // Client must NOT be authenticated
+        Assertions.assertEquals(0, WebSocketServerManager.getInstance().getConnectedCount());
+        client.closeBlocking();
     }
 }

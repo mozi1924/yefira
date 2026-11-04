@@ -30,7 +30,12 @@ public class VisualBlockEntityTest {
         );
         Assertions.assertNotNull(json);
         Assertions.assertTrue(json.contains("\"id\":\"minecraft:decorated_pot\""));
-        Assertions.assertTrue(json.contains("\"sherds\":[\"angler_pottery_sherd\",\"archer_pottery_sherd\",\"blade_pottery_sherd\",\"brewer_pottery_sherd\"]"));
+        Assertions.assertTrue(json.contains("\"sherds\":[\"angler\",\"archer\",\"blade\",\"brewer\"]"));
+
+        String potWithNulls = VisualBlockEntity.serializeDecoratedPot(
+                "minecraft:angler_pottery_sherd", "", "minecraft:brick", null
+        );
+        Assertions.assertEquals("{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"angler\",null,null,null]}", potWithNulls);
     }
 
     @Test

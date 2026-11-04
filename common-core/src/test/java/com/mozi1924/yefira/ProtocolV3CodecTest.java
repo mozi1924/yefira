@@ -135,7 +135,7 @@ public class ProtocolV3CodecTest {
         byte[] uuid = new byte[16];
         uuid[0] = 0x77;
         List<BlockDataEncoder.EntityEntry> entities = new ArrayList<>();
-        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"minecraft:angler_pottery_sherd\", \"\", \"\", \"\"]}";
+        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"angler\",null,null,null]}";
         entities.add(new BlockDataEncoder.EntityEntry(1, 2, 3, potJson));
         entities.add(new BlockDataEncoder.EntityEntry(10, 20, 30, (byte[]) null));
 
@@ -173,7 +173,7 @@ public class ProtocolV3CodecTest {
 
     @Test
     public void testDeltaEntityCodec() {
-        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"minecraft:miner_pottery_sherd\"]}";
+        String potJson = "{\"id\":\"minecraft:decorated_pot\",\"sherds\":[\"miner\",null,null,null]}";
         byte[] payload = potJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         byte[] bytes = BlockDataEncoder.encodeDeltaEntity(5L, 100L, 7, 8, 9, payload);

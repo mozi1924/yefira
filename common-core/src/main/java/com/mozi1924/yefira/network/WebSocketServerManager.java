@@ -383,7 +383,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
 
         @Override
         public void onMessage(WebSocket conn, String message) {
-            WebSocketServerManager.this.handleTextMessage(conn, message);
+            // Text frames are prohibited in RFC v3.1 pure binary protocol.
         }
 
         @Override
@@ -581,57 +581,6 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
         }
     }
 
-    /**
-     * Atomically and safely sends text frame data to a client, gracefully handling disconnections and cleaning up state.
-     */
-    public boolean sendSafe(WebSocket conn, String data) {
-        if (conn == null || !conn.isOpen()) {
-            if (conn != null) {
-                cleanupClient(conn);
-            }
-            return false;
-        }
-        try {
-            conn.send(data);
-            return true;
-        } catch (WebsocketNotConnectedException e) {
-            cleanupClient(conn);
-            return false;
-        } catch (Exception e) {
-            Yefira.LOGGER.warn("Failed to send data to client {}: {}", conn.getRemoteSocketAddress(), e.getMessage());
-            cleanupClient(conn);
-            return false;
-        }
-    }
-
-    private void handleTextMessage(WebSocket conn, String message) {
-        try {
-            String trimmed = message == null ? "" : message.trim();
-            if ("PING".equalsIgnoreCase(trimmed)) {
-                sendSafe(conn, "PONG");
-                return;
-            }
-            if (!clients.contains(conn)) {
-                return;
-            }
-            if ("REFRESH".equalsIgnoreCase(trimmed)) {
-                ClientConfig cfg = clientConfigs.computeIfAbsent(conn, k -> new ClientConfig());
-                long now = System.currentTimeMillis();
-                if (now - cfg.lastRefreshAt < 1000L) {
-                    return;
-                }
-                cfg.lastRefreshAt = now;
-                SelectionManager selectionManager = SelectionManager.getInstance();
-                if (selectionManager.hasSelection() && selectionManager.getCurrentLevel() != null) {
-                    startBaselineStream(conn, selectionManager.getCurrentLevel(), selectionManager.getCurrentSelection());
-                }
-            }
-        } catch (Exception e) {
-
-            Yefira.LOGGER.error("Error handling text message from DCC client", e);
-        }
-    }
-
     private void handleBinaryMessage(WebSocket conn, ByteBuffer message) {
         try {
             if (message == null || message.remaining() < 4) return;
@@ -666,15 +615,31 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 return;
             }
 
-            // Only HELLO/PING/SYNC_CONFIG are accepted before authentication.
+            // Validate known C2S opcodes; reject any unrecognized opcode with 0x10 ERROR and disconnect.
             if (packetType != BlockDataEncoder.OPCODE_HELLO
                     && packetType != BlockDataEncoder.OPCODE_PING
-                    && packetType != BlockDataEncoder.PACKET_C2S_SYNC_CONFIG
-                    && !clients.contains(conn)) {
+                    && packetType != BlockDataEncoder.OPCODE_PONG
+                    && packetType != BlockDataEncoder.OPCODE_BASELINE_ACK
+                    && packetType != BlockDataEncoder.OPCODE_CANCEL
+                    && packetType != BlockDataEncoder.OPCODE_RESYNC_REQUEST
+                    && packetType != BlockDataEncoder.OPCODE_SYNC_CONFIG) {
+                sendSafe(conn, BlockDataEncoder.encodeError(
+                        epoch,
+                        BlockDataEncoder.ERROR_UNKNOWN_OPCODE,
+                        "Unknown opcode 0x" + Integer.toHexString(packetType & 0xFF)));
+                conn.close(1002, "Unknown opcode");
+                cleanupClient(conn);
                 return;
             }
 
-            if (packetType == BlockDataEncoder.PACKET_C2S_SYNC_CONFIG) {
+            // Only HELLO and PING are accepted before authentication; SYNC_CONFIG and others are strictly gated.
+            if (!clients.contains(conn)
+                    && packetType != BlockDataEncoder.OPCODE_HELLO
+                    && packetType != BlockDataEncoder.OPCODE_PING) {
+                return;
+            }
+
+            if (packetType == BlockDataEncoder.OPCODE_SYNC_CONFIG) {
                 byte mode = message.remaining() > 0 ? message.get() : 0;
                 byte fps = message.remaining() > 0 ? message.get() : 60;
                 byte flags = message.remaining() > 0 ? message.get() : 1;
@@ -787,7 +752,18 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 return;
             }
 
-            if (packetType == BlockDataEncoder.OPCODE_RESYNC_REQUEST || packetType == BlockDataEncoder.PACKET_C2S_REQ_FULL_SYNC) {
+            if (packetType == BlockDataEncoder.OPCODE_RESYNC_REQUEST) {
+                BlockDataEncoder.ResyncRequestPacket resync = BlockDataEncoder.decodeResyncRequest(message);
+                if (resync == null) {
+                    Yefira.LOGGER.warn("Ignoring malformed RESYNC_REQUEST from {} ({} payload bytes)",
+                            conn.getRemoteSocketAddress(), message.remaining());
+                    return;
+                }
+                if (resync.epoch != epoch) {
+                    Yefira.LOGGER.debug("Ignoring stale RESYNC_REQUEST from {}: packet epoch={}, current epoch={}",
+                            conn.getRemoteSocketAddress(), resync.epoch, epoch);
+                    return;
+                }
                 ClientConfig cfg = clientConfigs.computeIfAbsent(conn, k -> new ClientConfig());
                 long now = System.currentTimeMillis();
                 if (now - cfg.lastResyncAt < 900L) {
@@ -807,6 +783,10 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     long ts = message.getLong();
                     sendSafe(conn, BlockDataEncoder.encodePong(ts));
                 }
+                return;
+            }
+
+            if (packetType == BlockDataEncoder.OPCODE_PONG) {
                 return;
             }
         } catch (Exception e) {

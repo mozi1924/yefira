@@ -27,18 +27,39 @@ public final class VisualBlockEntity {
     }
 
     /**
+     * Normalizes a Minecraft Pottery Sherd item ID or pattern name to its canonical pattern stem.
+     * E.g. "minecraft:angler_pottery_sherd" -> "angler"
+     *      "archer_pottery_pattern" -> "archer"
+     *      "brick" / "blank" / "" / null -> null
+     */
+    public static String normalizeSherd(String item) {
+        if (item == null) return null;
+        String clean = item.startsWith("minecraft:") ? item.substring(10) : item;
+        if (clean.endsWith("_pottery_sherd")) {
+            clean = clean.substring(0, clean.length() - 14);
+        } else if (clean.endsWith("_pottery_pattern")) {
+            clean = clean.substring(0, clean.length() - 16);
+        }
+        if (clean.isEmpty() || "brick".equals(clean) || "blank".equals(clean)) {
+            return null;
+        }
+        return clean;
+    }
+
+    /**
      * Serializes a Decorated Pot into canonical Visual Semantic NBT JSON.
+     * Sherds are normalized to pattern stems (e.g. "angler") and empty/brick sides serialize to null.
      */
     public static String serializeDecoratedPot(String back, String left, String right, String front) {
         StringBuilder sb = new StringBuilder(128);
         sb.append("{\"id\":\"minecraft:decorated_pot\",\"sherds\":[");
-        appendString(sb, back);
+        appendSherd(sb, back);
         sb.append(",");
-        appendString(sb, left);
+        appendSherd(sb, left);
         sb.append(",");
-        appendString(sb, right);
+        appendSherd(sb, right);
         sb.append(",");
-        appendString(sb, front);
+        appendSherd(sb, front);
         sb.append("]}");
         return sb.toString();
     }
@@ -153,11 +174,12 @@ public final class VisualBlockEntity {
         return null;
     }
 
-    private static void appendString(StringBuilder sb, String str) {
-        if (str != null && !str.isEmpty()) {
-            sb.append("\"").append(escape(str)).append("\"");
+    private static void appendSherd(StringBuilder sb, String str) {
+        String norm = normalizeSherd(str);
+        if (norm != null) {
+            sb.append("\"").append(escape(norm)).append("\"");
         } else {
-            sb.append("\"\"");
+            sb.append("null");
         }
     }
 
