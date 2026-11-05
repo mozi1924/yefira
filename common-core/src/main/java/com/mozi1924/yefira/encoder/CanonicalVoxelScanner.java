@@ -5,6 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
@@ -108,6 +109,8 @@ public class CanonicalVoxelScanner {
 
     private static final byte[] AIR_UTF8 = "minecraft:air".getBytes(StandardCharsets.UTF_8);
     private static final CanonicalBlock CANONICAL_AIR = new CanonicalBlock("minecraft:air", AIR_UTF8);
+    private static final byte[] WATER_UTF8 = "minecraft:water".getBytes(StandardCharsets.UTF_8);
+    private static final CanonicalBlock CANONICAL_WATER = new CanonicalBlock("minecraft:water", WATER_UTF8);
     private static final Map<BlockState, CanonicalBlock> CANONICAL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
     private static final String[] EMPTY_BIOMES = new String[0];
 
@@ -142,10 +145,18 @@ public class CanonicalVoxelScanner {
         if (state == null || state.isAir()) {
             return CANONICAL_AIR;
         }
-        if (state.is(Blocks.BUBBLE_COLUMN)
-                || state.is(Blocks.STRUCTURE_VOID)
+        if (state.is(Blocks.STRUCTURE_VOID)
                 || state.is(Blocks.CAVE_AIR)
                 || state.is(Blocks.VOID_AIR)) {
+            return CANONICAL_AIR;
+        }
+        if (state.is(Blocks.BUBBLE_COLUMN)) {
+            return CANONICAL_WATER;
+        }
+        if (state.is(Blocks.LIGHT) || state.is(Blocks.BARRIER)) {
+            if (state.hasProperty(BlockStateProperties.WATERLOGGED) && Boolean.TRUE.equals(state.getValue(BlockStateProperties.WATERLOGGED))) {
+                return CANONICAL_WATER;
+            }
             return CANONICAL_AIR;
         }
         CanonicalBlock cached = CANONICAL_CACHE.get(state);
