@@ -8,9 +8,9 @@
 		"${mod_author}"
 	],
 	"contact": {
-		"homepage": "https://github.com/mozi1924/mc-sync-blender",
-		"sources": "https://github.com/mozi1924/mc-sync-blender",
-		"issues": "https://github.com/mozi1924/mc-sync-blender/issues"
+		"homepage": "https://github.com/MoziToolKit/yefira",
+		"sources": "https://github.com/MoziToolKit/yefira",
+		"issues": "https://github.com/MoziToolKit/yefira/issues"
 	},
 	"license": "${license}",
 	"icon": "assets/yefira/icon.png",
