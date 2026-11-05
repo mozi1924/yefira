@@ -58,6 +58,13 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
     private long lastManifestBroadcastTick = 0;
     private final AtomicLong globalSeqId = new AtomicLong(1);
 
+    /**
+     * Active block entity positions currently tracked within the selection volume.
+     * When a tracked position is changed to a non-entity block state (e.g. broken to air),
+     * an explicit removal frame (payload = null) is broadcast to DCC clients.
+     */
+    private final Set<BlockPos> trackedEntityPositions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     // RFC v3.1 Session State
     private volatile byte[] serverUuidBytes = new byte[16];
     private volatile long epoch = 1;
@@ -1197,7 +1204,16 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                 }
             }
 
+            trackedEntityPositions.clear();
             if (scan.entities != null && !scan.entities.isEmpty()) {
+                for (BlockDataEncoder.EntityEntry ee : scan.entities) {
+                    BlockPos absPos = new BlockPos(
+                            scan.minPos.getX() + ee.relX,
+                            scan.minPos.getY() + ee.relY,
+                            scan.minPos.getZ() + ee.relZ
+                    );
+                    trackedEntityPositions.add(absPos);
+                }
                 byte[] entitiesPkt = BlockDataEncoder.encodeBaselineEntities(
                         epoch,
                         snapshotUuid,
@@ -1327,14 +1343,18 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                     Level currentLevel = SelectionManager.getInstance().getCurrentLevel();
                     if (currentLevel != null) {
                         for (BlockDataEncoder.BlockChangeEntry c : batch) {
+                            int rx = c.pos().getX() - min.getX();
+                            int ry = c.pos().getY() - min.getY();
+                            int rz = c.pos().getZ() - min.getZ();
+                            boolean hasEntity = false;
+
                             if (c.state().hasBlockEntity()) {
                                 net.minecraft.world.level.block.entity.BlockEntity be = currentLevel.getBlockEntity(c.pos());
                                 if (be != null) {
                                     String json = VersionCompat.level().serializeBlockEntityJson(be);
-                                    if (json != null) {
-                                        int rx = c.pos().getX() - min.getX();
-                                        int ry = c.pos().getY() - min.getY();
-                                        int rz = c.pos().getZ() - min.getZ();
+                                    if (json != null && !json.isEmpty()) {
+                                        hasEntity = true;
+                                        trackedEntityPositions.add(c.pos().immutable());
                                         entityPackets.add(BlockDataEncoder.encodeDeltaEntity(
                                                 epoch,
                                                 seqId,
@@ -1345,6 +1365,17 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
                                         ));
                                     }
                                 }
+                            }
+
+                            if (!hasEntity && trackedEntityPositions.remove(c.pos())) {
+                                entityPackets.add(BlockDataEncoder.encodeDeltaEntity(
+                                        epoch,
+                                        seqId,
+                                        rx,
+                                        ry,
+                                        rz,
+                                        null
+                                ));
                             }
                         }
                     }
@@ -1433,6 +1464,7 @@ public class WebSocketServerManager implements SelectionManager.SelectionChangeL
             pendingDeltaSelection = null;
             pendingDeltaOverflow = false;
         }
+        trackedEntityPositions.clear();
     }
 
     private static boolean sameBounds(SelectionBox a, SelectionBox b) {
