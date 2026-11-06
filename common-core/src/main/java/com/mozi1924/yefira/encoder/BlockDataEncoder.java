@@ -495,20 +495,13 @@ public class BlockDataEncoder {
     private static final Map<BlockState, byte[]> STATE_UTF8_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * 判断方块是否为空气或应被忽略的无网格方块（如结构空位、未含水的光源/屏障等）
+     * 判断方块是否为空气或应被规范化为空气的无网格方块（如结构空位等）
      */
     public static boolean isAirOrIgnored(BlockState state) {
         if (state == null || state.isAir()) {
             return true;
         }
-        if (state.is(net.minecraft.world.level.block.Blocks.STRUCTURE_VOID)) {
-            return true;
-        }
-        if (state.is(net.minecraft.world.level.block.Blocks.LIGHT) || state.is(net.minecraft.world.level.block.Blocks.BARRIER)) {
-            return !state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
-                    || !Boolean.TRUE.equals(state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED));
-        }
-        return false;
+        return state.is(net.minecraft.world.level.block.Blocks.STRUCTURE_VOID);
     }
 
     /**
@@ -517,14 +510,6 @@ public class BlockDataEncoder {
     public static String serializeBlockState(BlockState state) {
         if (isAirOrIgnored(state)) {
             return "minecraft:air";
-        }
-        if (state.is(net.minecraft.world.level.block.Blocks.BUBBLE_COLUMN)) {
-            return "minecraft:water";
-        }
-        if ((state.is(net.minecraft.world.level.block.Blocks.LIGHT) || state.is(net.minecraft.world.level.block.Blocks.BARRIER))
-                && state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
-                && Boolean.TRUE.equals(state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED))) {
-            return "minecraft:water";
         }
         String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         Collection<Property<?>> properties = state.getProperties();
