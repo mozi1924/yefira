@@ -1,8 +1,31 @@
-name: build
-on: [pull_request, push]
+name: Build & Release
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type (auto, rolling, or official)'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - rolling
+          - official
+      tag_name:
+        description: 'Custom tag name (optional, only for official release)'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    name: Build Minecraft ${{ matrix.version }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -77,14 +100,140 @@ jobs:
       - name: upload executable mod jars
         uses: actions/upload-artifact@v4
         with:
-          name: Yefira-Mod-Jars-${{ matrix.version }}-${{ github.ref_name }}
+          name: yefira-mod-jars-${{ matrix.version }}
           path: build/dist-mods/*.jar
+          if-no-files-found: error
 
       - name: upload sources and javadoc
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Yefira-Sources-Javadoc-${{ matrix.version }}-${{ github.ref_name }}
+          name: yefira-sources-javadoc-${{ matrix.version }}
           path: |
             versions/${{ matrix.version }}/*/build/libs/*-sources.jar
             versions/${{ matrix.version }}/*/build/libs/*-javadoc.jar
+          if-no-files-found: warn
+
+  publish-release:
+    name: Publish Release
+    needs: build
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all mod jar artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: yefira-mod-jars-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Checksums
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          cd dist
+          sha256sum *.jar > SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+
+      - name: Determine Release Target
+        id: release_meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.release_type }}" = "official" ] || ([ "${{ inputs.release_type }}" = "auto" ] && [ -n "${{ inputs.tag_name }}" ]); then
+              TARGET_TAG="${{ inputs.tag_name }}"
+              if [ -z "$TARGET_TAG" ]; then
+                echo "::error::tag_name is required for official release"
+                exit 1
+              fi
+              IS_PRERELEASE="false"
+            else
+              TARGET_TAG="ci-latest"
+              IS_PRERELEASE="true"
+            fi
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TARGET_TAG="${{ github.ref_name }}"
+            IS_PRERELEASE="false"
+          else
+            TARGET_TAG="ci-latest"
+            IS_PRERELEASE="true"
+          fi
+
+          echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Target Release Tag: $TARGET_TAG (Pre-release: $IS_PRERELEASE)"
+
+      - name: Prune stale release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release '$TAG' does not exist yet; nothing to prune."
+            exit 0
+          fi
+
+          mapfile -t existing < <(
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' | grep -E '\.jar$' || true
+          )
+          for name in "${existing[@]}"; do
+            if [ ! -f "dist/$name" ]; then
+              echo "Removing stale asset: $name"
+              gh release delete-asset "$TAG" "$name" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done
+          echo "Checked ${#existing[@]} existing jar asset(s)."
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release_meta.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.release_meta.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$TAG" = "ci-latest" ]; then
+            gh release view ci-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+              gh release create ci-latest --repo "$GITHUB_REPOSITORY" --prerelease \
+                --title "Yefira Rolling Pre-release (ci-latest)" \
+                --notes "Automated mod build from main branch. Updated continuously."
+
+            gh release edit ci-latest --repo "$GITHUB_REPOSITORY" \
+              --title "Yefira Rolling Pre-release (ci-latest)" \
+              --notes "Automated mod build from \`main\` (commit \`${GITHUB_SHA::7}\`).
+
+### Supported Minecraft Versions
+- **1.20.1** (Fabric / Forge)
+- **1.20.4** (Fabric / NeoForge)
+- **1.21.1** (Fabric / NeoForge)
+- **1.21.4** (Fabric / NeoForge)
+- **26.2** (Fabric / NeoForge)
+
+Built on $(date -u '+%Y-%m-%d %H:%M:%S UTC')."
+
+            gh release upload ci-latest dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            echo "Successfully updated rolling pre-release ci-latest."
+          else
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $TAG exists, uploading assets..."
+              gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            else
+              echo "Creating new release $TAG..."
+              gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+                --title "Yefira $TAG" \
+                --generate-notes \
+                $( [ "$IS_PRERELEASE" = "true" ] && echo "--prerelease" || echo "" )
+              gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            fi
+            echo "Successfully published release $TAG."
+          fi
