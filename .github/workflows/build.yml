@@ -3,6 +3,10 @@ name: Build & Release
 on:
   pull_request:
   push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       release_type:
@@ -208,18 +212,21 @@ jobs:
                 --title "Yefira Rolling Pre-release (ci-latest)" \
                 --notes "Automated mod build from main branch. Updated continuously."
 
+            printf '%s\n' \
+              "Automated mod build from main branch." \
+              "" \
+              "### Supported Minecraft Versions" \
+              "- **1.20.1** (Fabric / Forge)" \
+              "- **1.20.4** (Fabric / NeoForge)" \
+              "- **1.21.1** (Fabric / NeoForge)" \
+              "- **1.21.4** (Fabric / NeoForge)" \
+              "- **26.2** (Fabric / NeoForge)" \
+              "" \
+              "Built on $(date -u '+%Y-%m-%d %H:%M:%S UTC')." > /tmp/ci_release_notes.md
+
             gh release edit ci-latest --repo "$GITHUB_REPOSITORY" \
               --title "Yefira Rolling Pre-release (ci-latest)" \
-              --notes "Automated mod build from \`main\` (commit \`${GITHUB_SHA::7}\`).
-
-### Supported Minecraft Versions
-- **1.20.1** (Fabric / Forge)
-- **1.20.4** (Fabric / NeoForge)
-- **1.21.1** (Fabric / NeoForge)
-- **1.21.4** (Fabric / NeoForge)
-- **26.2** (Fabric / NeoForge)
-
-Built on $(date -u '+%Y-%m-%d %H:%M:%S UTC')."
+              --notes-file /tmp/ci_release_notes.md
 
             gh release upload ci-latest dist/* --repo "$GITHUB_REPOSITORY" --clobber
             echo "Successfully updated rolling pre-release ci-latest."
